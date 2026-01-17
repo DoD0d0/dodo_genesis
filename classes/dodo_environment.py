@@ -420,8 +420,8 @@ class DodoEnvironment:
         self.robot.set_dofs_kp(self.kp, self.motors_dof_idx)
         self.robot.set_dofs_kv(self.kd, self.motors_dof_idx)
 
-        max_force = 6.0 # Newtonmeter
-
+        max_force = 10.0 # Newtonmeter
+        
         self.robot.set_dofs_force_range(
             lower=-max_force * torch.ones(self.num_actions, dtype=torch.float32),
             upper= max_force * torch.ones(self.num_actions, dtype=torch.float32),
@@ -590,7 +590,7 @@ class DodoEnvironment:
         self.robot.set_dofs_kv(self.kd, self.motors_dof_idx)
 
         # Kraftgrenzen / Torque-Limit aus env_cfg (z.B. clip_actions), sonst Fallback
-        torque_limit = 6.0 #Newtonmeter
+        torque_limit = 10.0 #Newtonmeter
         self.robot.set_dofs_force_range(
             lower=- torque_limit * torch.ones(self.num_actions, dtype=torch.float32, device=self.device),
             upper=  torque_limit * torch.ones(self.num_actions, dtype=torch.float32, device=self.device),
@@ -683,11 +683,12 @@ class DodoEnvironment:
                     #     f"Vel: [{self.base_lin_vel[0,0]:.2f}, "
                     #     f"{self.base_lin_vel[0,1]:.2f}, {self.base_ang_vel[0,2]:.2f}]"
                     # )
-                    print(
-                        f"Applied Torque: [{self.robot.get_dofs_control_force()}"
-                        f"Actual Torque: [{self.robot.get_dofs_force()}"
-                    )
+                    # print(
+                    #     f"Applied Torque: [{self.robot.get_dofs_control_force()}"
+                    #     f"Actual Torque: [{self.robot.get_dofs_force()}"
+                    # )
                     #print(self.base_pos[0, 2], reward_cfg.get("base_height_target", 0.55))
+                    pass
     
 
     # -----------------------------------------------------------------------------
@@ -1059,7 +1060,7 @@ class DodoEnvironment:
         self.robot.set_dofs_kp(kp, self.motors_dof_idx)
         self.robot.set_dofs_kv(kd, self.motors_dof_idx)
 
-        torque_limit = 6.0  # oder was in deiner Hand-Demo gut funktioniert
+        torque_limit = 10.0  # oder was in deiner Hand-Demo gut funktioniert
         self.robot.set_dofs_force_range(
             lower=- torque_limit * torch.ones(self.num_actions, dtype=torch.float32),
             upper= torque_limit * torch.ones(self.num_actions, dtype=torch.float32),
@@ -1075,12 +1076,14 @@ class DodoEnvironment:
         # === Initialisiere Beobachtungs- und Aktionsspeicher ===
         self._init_buffers()
 
-        self.commands[:] = gs_rand_float(
-            self.command_config_dataclass.command_ranges.lin_vel_x[0],
-            self.command_config_dataclass.command_ranges.lin_vel_x[1],
-            (self.num_envs, self.num_commands),
-            self.device,
-        )
+        # self.commands[:] = gs_rand_float(
+        #     self.command_config_dataclass.command_ranges.lin_vel_x[0],
+        #     self.command_config_dataclass.command_ranges.lin_vel_x[1],
+        #     (self.num_envs, self.num_commands),
+        #     self.device,
+        # )
+
+        self._resample_commands(torch.arange(self.num_envs, device=self.device))
 
         
         # #######################################
@@ -1280,6 +1283,9 @@ class DodoEnvironment:
 
         # State aktualisieren & neue Obs holen
         self._update_robot_state()
+
+        self.prev_contact[:] = (self.current_ankle_heights < self.CONTACT_HEIGHT).float()
+
         obs, _ = self.get_observations()
         return obs
 
@@ -1310,6 +1316,8 @@ class DodoEnvironment:
 
         # Zustände aus Genesis holen
         self._update_robot_state()
+
+        self.prev_contact[:] = (self.current_ankle_heights < self.CONTACT_HEIGHT).float()
 
         # neue Commands ziehen
         self._resample_commands(all_ids_torch)
@@ -1472,6 +1480,29 @@ class DodoEnvironment:
         fallen = too_low | bad_orientation
         return fallen
     
+
+    def _gait_gate(self):
+        """
+        0 bei Stand / sehr kleinen Commands,
+        1 bei "wirklich laufen".
+        Schwellen kannst du später in configs auslagern.
+        """
+        v = torch.norm(self.commands[:, 0:2], dim=1)
+        vmin = 0.03   # darunter: wie "stehen"
+        vmax = 0.15   # darüber: voller gait reward
+        return torch.clamp((v - vmin) / (vmax - vmin), 0.0, 1.0)
+    
+    def _abduction_gate(self):
+        """
+        Gate für Abduction-Stabilisierung:
+        - voll aktiv bei vy ~ 0
+        - aus bei |vy| >= vy_max
+        """
+        vy = torch.abs(self.commands[:, 1])
+        vy_max = 0.10   # ab hier: keine Abduction-Einschränkung mehr
+        return torch.clamp(1.0 - vy / vy_max, 0.0, 1.0)
+
+
     # ---------------------------------------------------
     # Reward Funktionen (überarbeitet)
     # ---------------------------------------------------
@@ -1489,6 +1520,30 @@ class DodoEnvironment:
         # desired_right = (phase >= half).float()
         # # positiv im Bereich [0,1]
         # return desired_left * contact[:, 0] + desired_right * contact[:, 1]
+
+
+        # gate = self._gait_gate()
+
+        # phase = (self.episode_length_buf.float() * self.dt) % self.reward_config_dataclass.period
+        # half = self.reward_config_dataclass.period * 0.5
+        # contact = (self.current_ankle_heights < self.CONTACT_HEIGHT).float()  # (N,2)
+
+        # want_left_stance  = (phase < half).float()
+        # want_right_stance = (phase >= half).float()
+
+        # left_match  = want_left_stance  * contact[:,0] + (1-want_left_stance)  * (1-contact[:,0])
+        # right_match = want_right_stance * contact[:,1] + (1-want_right_stance) * (1-contact[:,1])
+
+        # return gate * 0.5 * (left_match + right_match)
+
+
+        """
+        Command-konditionierter Periodik-Reward (Mismatch-Form):
+        - bei v_cmd ~ 0 soll NICHT periodisch gelaufen werden -> desired_match ~ 0
+        - bei v_cmd groß soll periodisch gelaufen werden -> desired_match ~ 1
+        Reward ist hoch, wenn actual_match ~ desired_match.
+        """
+        # 1) Actual "periodic match" aus deinem bestehenden Kontakt-Phasen-Match
         phase = (self.episode_length_buf.float() * self.dt) % self.reward_config_dataclass.period
         half = self.reward_config_dataclass.period * 0.5
         contact = (self.current_ankle_heights < self.CONTACT_HEIGHT).float()  # (N,2)
@@ -1496,11 +1551,18 @@ class DodoEnvironment:
         want_left_stance  = (phase < half).float()
         want_right_stance = (phase >= half).float()
 
-        # Left: stance in first half, swing in second half
-        left_match  = want_left_stance  * contact[:,0] + (1-want_left_stance)  * (1-contact[:,0])
-        right_match = want_right_stance * contact[:,1] + (1-want_right_stance) * (1-contact[:,1])
+        left_match  = want_left_stance  * contact[:, 0] + (1 - want_left_stance)  * (1 - contact[:, 0])
+        right_match = want_right_stance * contact[:, 1] + (1 - want_right_stance) * (1 - contact[:, 1])
+        match = 0.5 * (left_match + right_match)  # in [0,1]
 
-        return 0.5*(left_match + right_match)
+        # 2) Desired match: wächst mit Command-Speed (dein existing gait_gate ist schon so eine Rampe)
+        desired = self._gait_gate()  # 0..1 abhängig von ||cmd_xy||
+
+        # 3) Mismatch-Penalty als Gauß-Reward um desired
+        # sigma bestimmt, wie "hart" du das Match erzwingst
+        sigma = 0.25
+        err = (match - desired) ** 2
+        return torch.exp(-err / (2 * sigma**2 + 1e-8))
 
 
     @register_reward()
@@ -1532,26 +1594,77 @@ class DodoEnvironment:
         - Maximaler Reward, wenn die Fußhöhe nahe `clearance_target` liegt
         - Zu niedrige UND zu hohe Swing-Höhen werden schlechter belohnt
         """
-        hs = self.current_ankle_heights              # shape (N, 2) für linkes/rechtes Fußgelenk
-        contact = (hs < self.CONTACT_HEIGHT).float() # 1 = Kontakt, 0 = kein Kontakt
-        swing_mask = 1.0 - contact                   # 1 = Swing, 0 = Kontakt
+        # hs = self.current_ankle_heights              # shape (N, 2) für linkes/rechtes Fußgelenk
+        # contact = (hs < self.CONTACT_HEIGHT).float() # 1 = Kontakt, 0 = kein Kontakt
+        # swing_mask = 1.0 - contact                   # 1 = Swing, 0 = Kontakt
 
-        # Nur die Höhen der Füße im Swing interessieren
-        clearance = hs * swing_mask
+        # # Nur die Höhen der Füße im Swing interessieren
+        # clearance = hs * swing_mask
+
+        # target = self.reward_config_dataclass.clearance_target
+        # # Breite der Glocke: z.B. halbe Zielhöhe, kannst du nach Geschmack tunen
+        # sigma = 0.4 * target  
+
+        # # Gauß um die Zielhöhe
+        # err = (clearance - target) ** 2
+        # per_foot = torch.exp(-err / (2 * sigma**2 + 1e-8))
+
+        # # Kontakte sollen gar keinen Reward bekommen
+        # per_foot = per_foot * swing_mask
+
+        # # Mittelwert über beide Füße → shape (N,)
+        # return per_foot.mean(dim=1)
+        
+        
+        # gate = self._gait_gate()
+
+        # hs = self.current_ankle_heights
+        # contact = (hs < self.CONTACT_HEIGHT).float()
+        # swing_mask = 1.0 - contact
+
+        # clearance = hs * swing_mask
+        # target = self.reward_config_dataclass.clearance_target
+        # sigma = 0.2 * target
+
+        # err = (clearance - target) ** 2
+        # per_foot = torch.exp(-err / (2 * sigma**2 + 1e-8))
+        # per_foot = per_foot * swing_mask
+
+        # return gate * per_foot.mean(dim=1)
+
+        """
+        Command-konditionierter Swing-Clearance Reward (Mismatch-Form):
+        - bei v_cmd ~ 0: desired_clearance ~ 0  (ruhig stehen, keine hohen Swings)
+        - bei v_cmd groß: desired_clearance ~ clearance_target
+        Reward ist hoch, wenn die Swing-Höhe zur gewünschten Höhe passt.
+        """
+        g = self._gait_gate()  # 0..1 abhängig von ||cmd_xy|| :contentReference[oaicite:2]{index=2}
+
+        hs = self.current_ankle_heights                          # (N,2)
+        contact = (hs < self.CONTACT_HEIGHT).float()             # (N,2)
+        swing_mask = 1.0 - contact                               # (N,2)
+
+        # actual swing heights (nur dort wo swing)
+        swing_h = hs * swing_mask                                # (N,2)
 
         target = self.reward_config_dataclass.clearance_target
-        # Breite der Glocke: z.B. halbe Zielhöhe, kannst du nach Geschmack tunen
-        sigma = 0.3 * target  
+        desired = (g * target).unsqueeze(1)                      # (N,1) -> broadcast auf (N,2)
 
-        # Gauß um die Zielhöhe
-        err = (clearance - target) ** 2
-        per_foot = torch.exp(-err / (2 * sigma**2 + 1e-8))
+        # nur Swing trägt bei; im Stand-Modus (beide in Kontakt) gibt's hier 0 Beitrag -> ok
+        # (Mismatch "viel Swing bei v=0" wird über swing_h vs desired bestraft sobald ein Fuß abhebt)
+        sigma = 0.25 * target + 1e-6
+        err = (swing_h - desired) ** 2
 
-        # Kontakte sollen gar keinen Reward bekommen
-        per_foot = per_foot * swing_mask
+        per_foot = torch.exp(-err / (2 * sigma**2))
+        per_foot = per_foot * swing_mask                         # Kontakte ignorieren
 
-        # Mittelwert über beide Füße → shape (N,)
-        return per_foot.mean(dim=1)
+        # Wenn beide Füße Kontakt: swing_mask=0 -> Reward=0.
+        # Das ist okay, weil "stehen" hauptsächlich durch Tracking/Orientation/Height/survive belohnt wird.
+        rew = per_foot.mean(dim=1)
+        #no_swing = (swing_mask.sum(dim=1) < 0.5).float()
+        #rew = torch.clamp(rew + no_swing * 1.0, 0.0, 1.0)
+        return rew
+
 
 
     @register_reward()
@@ -1580,6 +1693,8 @@ class DodoEnvironment:
         """
         Belohnt (nahezu) gestrecktes Knie in Standphase (Kontakt).
         """
+        gate = self._gait_gate()
+
         hs = self.current_ankle_heights
         # irgendein Fuß im Kontakt → Standphase
         stance = (hs < self.CONTACT_HEIGHT).any(dim=1).float()
@@ -1597,7 +1712,7 @@ class DodoEnvironment:
 
         ext_mean = 0.5 * (ext_l + ext_r)
 
-        return stance * ext_mean
+        return gate * stance * ext_mean
 
 
     @register_reward()
@@ -1709,20 +1824,37 @@ class DodoEnvironment:
         """
         Vogel‑typischer Hüft‑FE‑Zyklustreiber als Gauß‑Reward.
         """
+        # idx_l = self.idx_left_thigh
+        # idx_r = self.idx_right_thigh
+        # phase = ((self.episode_length_buf.float() * self.dt) % self.reward_config_dataclass.period) / self.reward_config_dataclass.period
+        # omega = 2 * math.pi * phase
+        # tgt  = self.reward_config_dataclass.bird_hip_target
+        # amp  = self.reward_config_dataclass.bird_hip_amp
+        # desired_l = tgt + amp * torch.sin(omega)
+        # desired_r = tgt - amp * torch.sin(omega)
+        # a_l = self.dof_pos[:, idx_l]
+        # a_r = self.dof_pos[:, idx_r]
+        # err = (a_l - desired_l)**2 + (a_r - desired_r)**2
+        # sigma = self.reward_config_dataclass.bird_hip_sigma
+        # return torch.exp(-err / (2 * sigma**2))
+        gate = self._gait_gate()
+
         idx_l = self.idx_left_thigh
         idx_r = self.idx_right_thigh
         phase = ((self.episode_length_buf.float() * self.dt) % self.reward_config_dataclass.period) / self.reward_config_dataclass.period
         omega = 2 * math.pi * phase
+
         tgt  = self.reward_config_dataclass.bird_hip_target
         amp  = self.reward_config_dataclass.bird_hip_amp
         desired_l = tgt + amp * torch.sin(omega)
         desired_r = tgt - amp * torch.sin(omega)
+
         a_l = self.dof_pos[:, idx_l]
         a_r = self.dof_pos[:, idx_r]
         err = (a_l - desired_l)**2 + (a_r - desired_r)**2
-        sigma = self.reward_config_dataclass.bird_hip_sigma
-        return torch.exp(-err / (2 * sigma**2))
 
+        sigma = self.reward_config_dataclass.bird_hip_sigma
+        return gate * torch.exp(-err / (2 * sigma**2))
 
     @register_reward()
     def _reward_hip_abduction_penalty(self):
@@ -1736,17 +1868,63 @@ class DodoEnvironment:
         # err = abd_l**2 + abd_r**2
         # sigma = self.reward_config_dataclass.hip_abduction_sigma
         # return torch.exp(-err / (2 * sigma**2))
+
+        # """
+        # Gauß-Strafe für Hüft-AA Abduktion/Adduktion.
+        # Nur aktiv wenn |v_y| klein ist (sonst braucht er Abspreizen).
+        # """
+        # gate = self._abduction_gate()  # <- deine neue Funktion
+
+        # idx_l = self.idx_left_hip
+        # idx_r = self.idx_right_hip
+        # abd_l = self.dof_pos[:, idx_l]
+        # abd_r = self.dof_pos[:, idx_r]
+
+        # err = abd_l**2 + abd_r**2
+        # sigma = self.reward_config_dataclass.hip_abduction_sigma
+
+        # return gate * torch.exp(-err / (2 * sigma**2))
+
         """
-        Echte Penalty (negativ) für Hüft-Abduktion/Adduktion.
+        Command-konditionierter Abduction-Reward (Mismatch-Form):
+        - bei |vy_cmd| ~ 0: desired_abd ~ 0  (Spur halten)
+        - bei |vy_cmd| groß: desired_abd ~ abd_max (Seitwärtsgehen erlauben/unterstützen)
         """
         idx_l = self.idx_left_hip
         idx_r = self.idx_right_hip
         abd_l = self.dof_pos[:, idx_l]
         abd_r = self.dof_pos[:, idx_r]
 
-        # Quadratische Strafe
-        err = abd_l**2 + abd_r**2
-        return -err
+        # 1) Messgröße: "wie viel Abduction nutzt du?"
+        abd = 0.5 * (abd_l.abs() + abd_r.abs())  # >=0
+
+        # 2) Desired-Abduction aus |vy_cmd|
+        vy = self.commands[:, 1].abs()
+
+        # lineare Rampe 0..vy_max -> 0..abd_max
+        vy_max = 0.20    # sollte ungefähr zu deinem command range passen :contentReference[oaicite:3]{index=3}
+        abd_max = 0.25   # rad, grob: erlaubte/gewünschte Abduction bei starkem Side-step
+
+        alpha = torch.clamp(vy / (vy_max + 1e-8), 0.0, 1.0)
+        desired = alpha * abd_max
+
+        # 3) Reward hoch, wenn abd nahe desired
+        sigma = self.reward_config_dataclass.hip_abduction_sigma
+        err = (abd - desired) ** 2
+        return torch.exp(-err / (2 * sigma**2 + 1e-8))
+
+
+        # """
+        # Echte Penalty (negativ) für Hüft-Abduktion/Adduktion.
+        # """
+        # idx_l = self.idx_left_hip
+        # idx_r = self.idx_right_hip
+        # abd_l = self.dof_pos[:, idx_l]
+        # abd_r = self.dof_pos[:, idx_r]
+
+        # # Quadratische Strafe
+        # err = abd_l**2 + abd_r**2
+        # return -err
 
 
     @register_reward()
@@ -1782,3 +1960,25 @@ class DodoEnvironment:
         diff = self.actions - self.last_actions
         err = torch.sum(diff**2, dim=1)
         return -err
+    
+    @register_reward()
+    def _reward_step_events(self):
+        # gate = self._gait_gate()
+
+        # contact = (self.current_ankle_heights < self.CONTACT_HEIGHT).float()  # (N,2)
+        # events = torch.clamp(contact - self.prev_contact, min=0.0)
+        # self.prev_contact[:] = contact
+
+        # return gate * events.sum(dim=1)
+
+        """
+        Command-konditionierter Step-Event Reward (Mismatch-Form):
+        - bei v_cmd ~ 0: desired_events ~ 0 (keine Schritte)
+        - bei v_cmd groß: desired_events ~ 2*dt/period (regelmäßige Schritte)
+        Reward hoch, wenn Event-Rate zur gewünschten passt.
+        """
+        g = self._gait_gate()
+        contact = (self.current_ankle_heights < self.CONTACT_HEIGHT).float()
+        events = torch.clamp(contact - self.prev_contact, min=0.0)
+        self.prev_contact[:] = contact
+        return g * events.sum(dim=1)   # 0..2
