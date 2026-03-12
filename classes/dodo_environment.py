@@ -691,6 +691,124 @@ class DodoEnvironment:
                     pass
     
 
+    def export_checkpoint_to_jit(self, exp_name: str, model_name: str = "model_best.pt"):
+        """
+        Convert a training checkpoint (.pt) to a TorchScript JIT model for inference.
+
+        The JIT model will be saved next to the checkpoint.
+
+        This export uses the observation dimension stored in the checkpoint,
+        so it also works for older policies that were trained with a different
+        observation layout (e.g. without clock sin/cos).
+        """
+        #self.device = gs.cpu
+        root_dir = str(self.dodo_path_helper.relevant_paths_dict["project_root"])
+        log_dir = os.path.join(root_dir, "logs", exp_name)
+        checkpoint_path = os.path.join(log_dir, model_name)
+
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+        print(f"Loading checkpoint: {checkpoint_path}")
+
+        # configs laden
+        with open(os.path.join(log_dir, "cfgs.pkl"), "rb") as f:
+            env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg = pickle.load(f)
+
+        # Checkpoint direkt laden, um die echte Obs-Dimension aus den Gewichten zu lesen
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+
+        try:
+            ckpt_num_obs = checkpoint["model_state_dict"]["actor.0.weight"].shape[1]
+        except KeyError:
+            raise KeyError(
+                "Could not infer observation dimension from checkpoint. "
+                "Expected key 'model_state_dict[\"actor.0.weight\"]'."
+            )
+
+        print(f"Checkpoint observation dimension: {ckpt_num_obs}")
+
+        # ------------------------------------------------------------
+        # Dummy-Env nur für den Runner-Aufbau
+        # ------------------------------------------------------------
+        class DummyExportEnv:
+            def __init__(self, num_obs, num_actions, device):
+                self.num_obs = num_obs
+                self.num_actions = num_actions
+                self.num_envs = 1
+                self.device = device
+
+            def get_observations(self):
+                obs = torch.zeros((1, self.num_obs), device=self.device)
+                return obs, {"observations": {"critic": obs.clone()}}
+
+            def get_privileged_observations(self):
+                return None
+
+            def reset(self):
+                obs = torch.zeros((1, self.num_obs), device=self.device)
+                return obs, {"observations": {"critic": obs.clone()}}
+
+            def step(self, actions):
+                obs = torch.zeros((1, self.num_obs), device=self.device)
+                rew = torch.zeros((1,), device=self.device)
+                done = torch.zeros((1,), dtype=torch.bool, device=self.device)
+                infos = {"observations": {"critic": obs.clone()}}
+                return obs, rew, done, infos
+
+        dummy_env = DummyExportEnv(
+            num_obs=ckpt_num_obs,
+            num_actions=self.num_actions,
+            device=self.device,
+        )
+
+        # Runner auf Basis der Checkpoint-Architektur erzeugen
+        runner = OnPolicyRunner(
+            env=dummy_env,
+            train_cfg=train_cfg,
+            log_dir=log_dir,
+            device=self.device,
+        )
+
+        # Gewichte + Normalizer laden
+        runner.load(checkpoint_path)
+
+        policy = runner.alg.actor_critic.actor
+        obs_normalizer = runner.obs_normalizer
+
+        policy.eval()
+        if obs_normalizer is not None:
+            obs_normalizer.eval()
+
+        class PolicyWrapper(torch.nn.Module):
+            def __init__(self, policy, obs_norm):
+                super().__init__()
+                self.policy = policy
+                self.obs_norm = obs_norm
+
+            def forward(self, obs):
+                if self.obs_norm is not None:
+                    obs = self.obs_norm(obs)
+                return self.policy(obs)
+
+        model = PolicyWrapper(policy, obs_normalizer).to(self.device)
+        model.eval()
+
+        example_obs = torch.zeros(1, ckpt_num_obs, device=self.device)
+
+        print("Tracing model...")
+        with torch.no_grad():
+            try:
+                scripted_model = torch.jit.trace(model, example_obs)
+            except Exception:
+                print("Trace failed, using script instead...")
+                scripted_model = torch.jit.script(model)
+
+        jit_path = os.path.splitext(checkpoint_path)[0] + ".jit.pt"
+        scripted_model.save(jit_path)
+
+        print(f"JIT model saved to: {jit_path}")
+
     # -----------------------------------------------------------------------------
     # Logging and plotting of RL training
     # -----------------------------------------------------------------------------
