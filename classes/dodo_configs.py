@@ -279,7 +279,7 @@ def init_dodo_configs(
     """
     This function can be used to directly create and return all configs that are relevant for the DODO training as dataclasses.
     You can easily create a dataclass object on your own and use that.
-    This function can be used it should contain good values for training walking to the dodo.
+    This function can be used it should in good values for training walking to the dodo.
     
     :param exp_name: Name of the experiment
     :type exp_name: str
@@ -301,11 +301,11 @@ def init_dodo_configs(
         algorithm=TrainAlgorithm(
             class_name =                  "PPO",
             clip_param =                  0.2,
-            desired_kl =                  0.01,    # <- vorher 0.01
-            entropy_coef =                0.02,    # <- vorher 0.01
+            desired_kl =                  0.017,    # <- vorher 0.01
+            entropy_coef =                0.008,    # <- vorher 0.01
             gamma =                       0.99,    # <- vorher 0.98
             lam =                         0.95,
-            learning_rate =               2e-4,     # <- vorher 2e-4
+            learning_rate =               1.5e-4,     # <- vorher 2e-4
             max_grad_norm =               1.0,    # <- vorher 1.0
             num_learning_epochs =         4,      # <- vorher 8
             num_mini_batches =            8,        # split big batch into many mini-batches
@@ -318,7 +318,7 @@ def init_dodo_configs(
             activation=                   "elu",
             actor_hidden_dims=            [512, 256, 128],
             critic_hidden_dims=           [512, 256, 128],
-            init_noise_std=               0.12,     # <- vorher 0.15
+            init_noise_std=               0.20,     # <- vorher 0.15
             class_name=                   "ActorCritic"
         ),
         runner=TrainRunner(
@@ -344,7 +344,7 @@ def init_dodo_configs(
 
 
     terrain_config_dataclass: TerrainCfg = TerrainCfg(
-        mode="uneven",
+        mode="plane",
         options=["plane", "uneven"],
         probs=[0.5, 0.5],
         uneven=UnevenTerrainCfg(
@@ -361,8 +361,8 @@ def init_dodo_configs(
     env_config_dataclass: EnvCfg = EnvCfg(
         num_actions=                      len(joint_names),
         default_joint_angles=DodoJointAngles(
-            left_hip=                     0.00,
-            right_hip=                    0.00,
+            left_hip=                     0.0,
+            right_hip=                    0.0,
             left_thigh=                   0.4,
             right_thigh=                  0.4,
             left_knee=                    -0.7,
@@ -380,17 +380,17 @@ def init_dodo_configs(
             left_foot_ankle=              joint_names[7],
             right_foot_ankle=             joint_names[3],
         ),
-        kp=                               100.0,
-        kd=                               2.0 * np.sqrt(100.0), #== 2.0 * np.sqrt(150.0)
+        kp=                               130.0,
+        kd=                               1.6 * np.sqrt(130.0), #== 2.0 * np.sqrt(150.0)
         termination_if_roll_greater_than= 30.0,
         termination_if_pitch_greater_than=30.0,
         base_init_pos=                    [0.0, 0.0, 0.55],
         base_init_quat=                   [1.0, 0.0, 0.0, 0.0],
         episode_length_s=                 10.0,
-        resampling_time_s=                2.0,
-        action_scale=                     1.0,
+        resampling_time_s=                10.0,
+        action_scale=                     0.7,
         simulate_action_latency=          False,
-        clip_actions=                     25.0, # war 100 -> sinnvoll clampen
+        clip_actions=                     1.5, # war 100 -> sinnvoll clampen
         robot_file_path=                  robot_file_path_relative, # for example: "robot_mjcf": dodo_robot\dodo.xml
         foot_link_names=                  foot_link_names, # for example: ['Left_FOOT_FE', 'Right_FOOT_FE']
         robot_file_format=                robot_file_format,
@@ -401,63 +401,63 @@ def init_dodo_configs(
         num_obs=                          num_obs,
         obs_scales=DodoObservations(
             lin_vel=                      2.0,
-            ang_vel=                      1.0, #-> vorher 0.6
+            ang_vel=                      0.25, #-> vorher 0.6
             dof_pos=                      1.0,
-            dof_vel=                      0.1
+            dof_vel=                      0.05
         )
     )
 
     reward_config_dataclass: RewardCfg = RewardCfg(
         reward_scales=RewardScales(
             #velocity tracking
-            tracking_lin_vel=             10.0,
-            tracking_ang_vel=             6.0,
+            tracking_lin_vel=             7.0,
+            tracking_ang_vel=             4.0,
             #stability and posture
-            orientation_stability=        0.15,
-            base_height=                  0.2,
-            survive=                      0.01,
-            fall_penalty=                 10.0,
-            vertical_stability=           0.01,  # oder 0.05 zum Start. hüpfen
+            orientation_stability=        0.3,
+            base_height=                  0.4,
+            survive=                      0.17,
+            fall_penalty=                 50.0,
+            vertical_stability=           0.06,  # oder 0.05 zum Start. hüpfen
             #gait-shaping (bird style)
-            periodic_gait=                0.03,
-            foot_swing_clearance=         1.2,
-            knee_extension_at_push=       0.02,
-            bird_hip_phase=               0.3,
-            forward_torso_pitch=          0.01,
+            periodic_gait=                0.0,
+            foot_swing_clearance=         0.6,
+            knee_extension_at_push=       0.0,
+            bird_hip_phase=               0.0,
+            forward_torso_pitch=          0.0,
             #Joint penalties
-            hip_abduction_penalty=        0.5,
+            hip_abduction_penalty=        0.03,
             #drift and efficiency
-            lateral_drift_penalty=        0.0, # drift in x richtung 
-            action_rate=                  0.06, # Definiere eine Funktion, die dafür sorgt, dass die gesampleten aktionen nicht zu weit von den vorigen abweichen (smoother trajectory).
+            lateral_drift_penalty=        0.15, # drift in x richtung 
+            action_rate=                  0.0005, # Definiere eine Funktion, die dafür sorgt, dass die gesampleten aktionen nicht zu weit von den vorigen abweichen (smoother trajectory).
             energy_penalty=               0.0,
-            step_events=                  0.0,
+            step_events=                  1.0,
         ),
         # Hyperparameter für die Gauß‑Formen und Targets
-        tracking_sigma=                   0.20,
-        base_height_target=               0.55,
-        height_sigma=                     0.25,   # Hüfthöhe
-        orient_sigma=                     0.25,   # Roll/Pitch
-        energy_sigma=                     0.30,   # Aktionsänderung
-        period=                           1.30,   # Zyklusdauer in s
-        clearance_target=                 0.12,   # m, min. Fußhöhe im Swing
-        pitch_target=                     0.15,   # rad (~10°), leichter Vorwärts‑Pitch
-        pitch_sigma=                      0.10,   # Breite für Pitch‑Reward
+        tracking_sigma=                   0.08,
+        base_height_target=               0.54,
+        height_sigma=                     0.06,   # Hüfthöhe
+        orient_sigma=                     0.07,   # Roll/Pitch
+        energy_sigma=                     0.035,   # Aktionsänderung
+        period=                           1.0,   # Zyklusdauer in s
+        clearance_target=                 0.1,   # m, min. Fußhöhe im Swing
+        pitch_target=                     0.0,   # rad (~10°), leichter Vorwärts‑Pitch
+        pitch_sigma=                      0.07,   # Breite für Pitch‑Reward
         bird_hip_target=                 -0.7,   # rad (~20°) Hüft‑FE‑Baseline nach hinten
         bird_hip_amp=                     0.35,   # rad (~8°) Zyklus‑Amplitude
-        bird_hip_sigma=                   0.30,   # Breite des Hüft‑Phase‑Rewards
-        hip_abduction_sigma=              0.175,   # Breite für Hüft‑AA‑Penalty
-        drift_sigma=                      0.15,   # Breite für seitliche Drift
+        bird_hip_sigma=                   0.12,   # Breite des Hüft‑Phase‑Rewards
+        hip_abduction_sigma=              0.12,   # Breite für Hüft‑AA‑Penalty
+        drift_sigma=                      0.08,   # Breite für seitliche Drift
         pitch_threshold=                  40 * pi/180,
         roll_threshold=                   40 * pi/180,
-        base_height_threshold=            0.38   # If the base height gets lower than that the robot is considered fallen.
+        base_height_threshold=            0.37   # If the base height gets lower than that the robot is considered fallen.
     )
 
     command_config_dataclass: CommandCfg = CommandCfg(
         num_commands= 3,
-        resampling_time_s= 2.0,
+        resampling_time_s= 10,
         command_ranges=CommandRanges(
-            lin_vel_x=[0.1, 1.0],
-            lin_vel_y=[0.0, 0.0], # Geradeaus
+            lin_vel_x=[0.0, 0.6],
+            lin_vel_y=[0.0, 0.0], 
             ang_vel_yaw=[0.0, 0.0] # for example [-1.0, 1.0]
         )
     )

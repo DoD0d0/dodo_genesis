@@ -51,8 +51,8 @@ def gs_rand_float(lower, upper, shape, device):
 
 
 class DodoEnvironment:
-    CONTACT_HEIGHT = 0.04
-    SWING_HEIGHT_THRESHOLD = 0.05
+    CONTACT_HEIGHT = 0.047 # result in debug for "foot on the ground" was (tensor([0.0426, 0.0425], device='cuda:0'))
+    SWING_HEIGHT_THRESHOLD = 0.065 #
 
     def __init__(self, 
                  dodo_path_helper: FileFormatAndPaths,
@@ -74,12 +74,12 @@ class DodoEnvironment:
         self.joint_names_unmapped = dodo_path_helper.joint_names # unsorted list of joint names (Order is exactly like the one in the urdf (from top to bottom))
         self.foot_link_names = dodo_path_helper.foot_link_names
 
-        self._base_components = 3 + 3 + 1 + 3    # lin_vel, ang_vel, height, proj_grav
-        self._per_dof_components = 3 * len(self.joint_names_unmapped)  # pos, vel, torque
+        self._base_components = 3 + 3 + 3    # lin_vel, ang_vel, proj_grav
+        self._per_dof_components = 3 * len(self.joint_names_unmapped)  # pos, vel, last_action
         self._command_components = 3
 
         # +2: Clock/Phase (sin, cos) -> damit Periodic-Gait/Phase-Rewards lernbar werden
-        self._clock_components = 2
+        self._clock_components = 0 # TODO set to 2 if you want to use clock-based rewards (like periodic gait reward, bird hip phase reward, etc.)
 
         self.num_obs = (
             self._base_components
@@ -197,7 +197,7 @@ class DodoEnvironment:
                 gravity=(0, 0, -9.81)
             ),
             viewer_options: gs.options.ViewerOptions = gs.options.ViewerOptions(
-                max_FPS=60,
+                max_FPS=100,
                 camera_pos=(2.0, 0.0, 2.5),
                 camera_lookat=(0.0, 0.0, 0.5),
                 camera_fov=40
@@ -420,7 +420,7 @@ class DodoEnvironment:
         self.robot.set_dofs_kp(self.kp, self.motors_dof_idx)
         self.robot.set_dofs_kv(self.kd, self.motors_dof_idx)
 
-        max_force = 10.0 # Newtonmeter
+        max_force = 7.0 # Newtonmeter
         
         self.robot.set_dofs_force_range(
             lower=-max_force * torch.ones(self.num_actions, dtype=torch.float32),
@@ -439,7 +439,7 @@ class DodoEnvironment:
         q_amp  = 0.8
         freq   = 1.3
         omega  = 2 * np.pi * freq
-        kp     = 200.0  * np.ones(n_dofs, dtype=np.float32)
+        kp     = 50.0  * np.ones(n_dofs, dtype=np.float32)
         kv     = 2.0 * np.sqrt(kp) 
         self.robot.set_dofs_kp(kp, self.motors_dof_idx)
         self.robot.set_dofs_kv(kv, self.motors_dof_idx)
@@ -482,14 +482,14 @@ class DodoEnvironment:
     def import_robot_standing(self, manual_stepping: bool = False, total_steps: int = 2000, spawn_position: tuple[float, float, float] = (0.0, 0.0, 0.55)):
         self.num_envs = 1
 
-        scene = self.create_genesis_scene(show_viewer=True, show_FPS=True)
+        scene = self.create_genesis_scene(show_viewer=True, show_FPS=False)
         self._init_dodo_scene(scene = scene, spawn_position = spawn_position, terrain_cfg=self.env_config_dataclass.terrain_cfg)
         
         n_dofs    = len(self.motors_dof_idx)
         q_amp  = 0.8
         freq   = 1.3
         omega  = 2 * np.pi * freq
-        kp     = 200.0  * np.ones(n_dofs, dtype=np.float32)
+        kp     = 120.0  * np.ones(n_dofs, dtype=np.float32)
         kv     = 2.0*np.sqrt(kp) 
         self.robot.set_dofs_kp(kp, self.motors_dof_idx)
         self.robot.set_dofs_kv(kv, self.motors_dof_idx)
@@ -518,6 +518,268 @@ class DodoEnvironment:
                 print("Viewer closed – simulation finished.")
             else:
                 raise
+
+    def test_robot_controller(
+        self,
+        manual_stepping: bool = False,
+        total_steps: int = 1000,
+        spawn_position: tuple[float, float, float] = (0.0, 0.0, 0.55),
+        kp_value: float = 120.0,
+        kd_value: float | None = None,
+        torque_limit: float = 5.0,
+        q_amp: float = 0.25,
+        freq: float = 2.0,
+        test_joint_idx: int = 3,
+        test_mode: str = "sine",   # "sine" oder "step"
+    ):
+        """
+        Debug / Identification function for testing PD gains on the robot.
+
+        Features:
+        - Tests one selected joint around the default pose
+        - Logs desired position, actual position, error, velocity and control torque
+        - Computes MAE / RMSE / max error / torque saturation ratio
+        - Optional plotting
+
+        Parameters
+        ----------
+        manual_stepping : bool
+            If True, waits for Enter each step.
+        total_steps : int
+            Number of simulation steps.
+        spawn_position : tuple
+            Robot spawn position.
+        kp_value : float
+            Positional gain for all actuated DOFs.
+        kd_value : float | None
+            Velocity gain for all actuated DOFs. If None, uses 2*sqrt(kp_value).
+        torque_limit : float
+            Symmetric force / torque limit in Nm.
+        q_amp : float
+            Amplitude of the test motion in rad.
+        freq : float
+            Frequency for sine motion in Hz.
+        test_joint_idx : int
+            Local test joint index in self.joint_names.
+        test_mode : str
+            "sine" for sinusoidal target, "step" for step target.
+        plot_results : bool
+            If True, plots the logs at the end.
+        """
+        self.num_envs = 1
+
+        scene = self.create_genesis_scene(show_viewer=True, show_FPS=False)
+        self._init_dodo_scene(
+            scene=scene,
+            spawn_position=spawn_position,
+            terrain_cfg=self.env_config_dataclass.terrain_cfg,
+        )
+
+        n_dofs = len(self.motors_dof_idx)
+
+        if kd_value is None:
+            kd_value = 2.0 * np.sqrt(kp_value)
+
+        kp = kp_value * np.ones(n_dofs, dtype=np.float32)
+        kv = kd_value * np.ones(n_dofs, dtype=np.float32)
+
+        self.robot.set_dofs_kp(kp, self.motors_dof_idx)
+        self.robot.set_dofs_kv(kv, self.motors_dof_idx)
+        self.robot.set_dofs_force_range(
+            lower=-torque_limit * np.ones(n_dofs, dtype=np.float32),
+            upper=torque_limit * np.ones(n_dofs, dtype=np.float32),
+            dofs_idx_local=self.motors_dof_idx,
+        )
+
+        dt = float(self.genesis_scene.sim_options.dt)
+        omega = 2.0 * np.pi * freq
+
+        if not (0 <= test_joint_idx < n_dofs):
+            raise ValueError(
+                f"test_joint_idx must be in [0, {n_dofs - 1}], got {test_joint_idx}"
+            )
+
+        joint_name = self.joint_names[test_joint_idx]
+        default_pose = np.array(self.default_joint_angles, dtype=np.float32)
+
+        print("\n[PD TEST] Starting import_robot_sim")
+        print(f"  joint index      : {test_joint_idx}")
+        print(f"  joint name       : {joint_name}")
+        print(f"  mode             : {test_mode}")
+        print(f"  kp               : {kp_value}")
+        print(f"  kd               : {kd_value}")
+        print(f"  torque_limit     : {torque_limit}")
+        print(f"  q_amp            : {q_amp}")
+        print(f"  freq             : {freq}")
+        print(f"  dt               : {dt}")
+        print(f"  default pose     : {default_pose}")
+
+        # --- logging buffers ---
+        t_log = []
+        q_des_log = []
+        q_act_log = []
+        q_err_log = []
+        qd_act_log = []
+        tau_ctrl_log = []
+        tau_sat_log = []
+        base_height_log = []
+
+        try:
+            for step in range(total_steps):
+                t = step * dt
+
+                q_des = default_pose.copy()
+
+                if test_mode == "sine":
+                    q_des[test_joint_idx] = (
+                        default_pose[test_joint_idx] + q_amp * np.sin(omega * t)
+                    )
+
+                elif test_mode == "step":
+                    # 0-25%: default
+                    # 25-50%: +amp
+                    # 50-75%: -amp
+                    # 75-100%: default
+                    phase = step / max(total_steps - 1, 1)
+
+                    if phase < 0.25:
+                        delta = 0.0
+                    elif phase < 0.50:
+                        delta = q_amp
+                    elif phase < 0.75:
+                        delta = -q_amp
+                    else:
+                        delta = 0.0
+
+                    q_des[test_joint_idx] = default_pose[test_joint_idx] + delta
+
+                else:
+                    raise ValueError("test_mode must be either 'sine' or 'step'")
+
+                self.robot.control_dofs_position(q_des, self.motors_dof_idx)
+
+                if manual_stepping:
+                    input("Press Enter to continue...")
+
+                self.genesis_scene.step()
+
+                # --- read back states ---
+                q_all = self.robot.get_dofs_position()
+                qd_all = self.robot.get_dofs_velocity()
+
+                # try to read control torque and actual torque
+                tau_ctrl_all = None
+                tau_act_all = None
+
+                try:
+                    tau_ctrl_all = self.robot.get_dofs_control_force()
+                except Exception:
+                    pass
+
+                try:
+                    tau_act_all = self.robot.get_dofs_force()
+                except Exception:
+                    pass
+
+                q_actual = np.array(q_all[0, self.motors_dof_idx].detach().cpu().numpy(), dtype=np.float32)
+                qd_actual = np.array(qd_all[0, self.motors_dof_idx].detach().cpu().numpy(), dtype=np.float32)
+
+                if tau_ctrl_all is not None:
+                    tau_ctrl = np.array(
+                        tau_ctrl_all[0, self.motors_dof_idx].detach().cpu().numpy(),
+                        dtype=np.float32,
+                    )
+                else:
+                    tau_ctrl = np.full(n_dofs, np.nan, dtype=np.float32)
+
+                if tau_act_all is not None:
+                    tau_act = np.array(
+                        tau_act_all[0, self.motors_dof_idx].detach().cpu().numpy(),
+                        dtype=np.float32,
+                    )
+                else:
+                    tau_act = np.full(n_dofs, np.nan, dtype=np.float32)
+
+                q_err = q_des - q_actual
+                base_pos = self.robot.get_pos()
+                base_height = float(base_pos[0, 2].detach().cpu().item())
+
+                # saturation flag based on commanded torque
+                if np.all(np.isfinite(tau_ctrl)):
+                    tau_sat = (np.abs(tau_ctrl) >= 0.98 * torque_limit).astype(np.float32)
+                else:
+                    tau_sat = np.zeros(n_dofs, dtype=np.float32)
+
+                # --- store logs ---
+                t_log.append(t)
+                q_des_log.append(q_des.copy())
+                q_act_log.append(q_actual.copy())
+                q_err_log.append(q_err.copy())
+                qd_act_log.append(qd_actual.copy())
+                tau_ctrl_log.append(tau_ctrl.copy())
+                tau_sat_log.append(tau_sat.copy())
+                base_height_log.append(base_height)
+
+                if manual_stepping:
+                    print(
+                        f"[step {step:4d}] "
+                        f"joint={joint_name} | "
+                        f"q_des={q_des[test_joint_idx]: .4f} | "
+                        f"q_act={q_actual[test_joint_idx]: .4f} | "
+                        f"err={q_err[test_joint_idx]: .4f} | "
+                        f"qd={qd_actual[test_joint_idx]: .4f} | "
+                        f"tau_ctrl={tau_ctrl[test_joint_idx]: .4f} | "
+                        f"base_z={base_height: .4f}"
+                    )
+
+            # --- convert logs to arrays ---
+            t_log = np.asarray(t_log, dtype=np.float32)
+            q_des_log = np.asarray(q_des_log, dtype=np.float32)       # (T, n_dofs)
+            q_act_log = np.asarray(q_act_log, dtype=np.float32)       # (T, n_dofs)
+            q_err_log = np.asarray(q_err_log, dtype=np.float32)       # (T, n_dofs)
+            qd_act_log = np.asarray(qd_act_log, dtype=np.float32)     # (T, n_dofs)
+            tau_ctrl_log = np.asarray(tau_ctrl_log, dtype=np.float32) # (T, n_dofs)
+            tau_sat_log = np.asarray(tau_sat_log, dtype=np.float32)   # (T, n_dofs)
+            base_height_log = np.asarray(base_height_log, dtype=np.float32)
+
+            # --- metrics ---
+            mae = np.mean(np.abs(q_err_log), axis=0)
+            rmse = np.sqrt(np.mean(q_err_log ** 2, axis=0))
+            max_err = np.max(np.abs(q_err_log), axis=0)
+            mean_speed = np.mean(np.abs(qd_act_log), axis=0)
+
+            if np.all(np.isfinite(tau_ctrl_log)):
+                mean_abs_tau = np.mean(np.abs(tau_ctrl_log), axis=0)
+                sat_ratio = np.mean(tau_sat_log, axis=0)
+            else:
+                mean_abs_tau = np.full(n_dofs, np.nan, dtype=np.float32)
+                sat_ratio = np.full(n_dofs, np.nan, dtype=np.float32)
+
+            print("\n[PD TEST RESULTS]")
+            for i, name in enumerate(self.joint_names):
+                print(
+                    f"{i:02d} | {name:20s} | "
+                    f"MAE={mae[i]:.4f} rad | "
+                    f"RMSE={rmse[i]:.4f} rad | "
+                    f"MAX={max_err[i]:.4f} rad | "
+                    f"|qd|={mean_speed[i]:.4f} rad/s | "
+                    f"|tau|={mean_abs_tau[i]:.4f} Nm | "
+                    f"sat={sat_ratio[i] * 100.0:.1f}%"
+                )
+
+            print(
+                f"\n[Test joint summary] {joint_name} | "
+                f"MAE={mae[test_joint_idx]:.4f} rad | "
+                f"RMSE={rmse[test_joint_idx]:.4f} rad | "
+                f"MAX={max_err[test_joint_idx]:.4f} rad | "
+                f"sat={sat_ratio[test_joint_idx] * 100.0:.1f}%"
+            )
+
+        except gs.GenesisException as e:
+            if "Viewer closed" in str(e):
+                print("Viewer closed – simulation finished.")
+                return None
+            raise
 
     def _terrain_cfg_from_dict(self, d: dict) -> TerrainCfg:
         uneven = UnevenTerrainCfg(**d["uneven"])
@@ -590,7 +852,7 @@ class DodoEnvironment:
         self.robot.set_dofs_kv(self.kd, self.motors_dof_idx)
 
         # Kraftgrenzen / Torque-Limit aus env_cfg (z.B. clip_actions), sonst Fallback
-        torque_limit = 10.0 #Newtonmeter
+        torque_limit = 7.0 #Newtonmeter
         self.robot.set_dofs_force_range(
             lower=- torque_limit * torch.ones(self.num_actions, dtype=torch.float32, device=self.device),
             upper=  torque_limit * torch.ones(self.num_actions, dtype=torch.float32, device=self.device),
@@ -674,6 +936,10 @@ class DodoEnvironment:
                 self.commands[:, 1] = v_y
                 self.commands[:, 2] = v_ang
 
+                #print ankle heights and contact state for debugging
+                # print(self.current_ankle_heights[0]) 
+                # print((self.current_ankle_heights[0] < self.CONTACT_HEIGHT).float())
+
                 if self.episode_length_buf[0] % 10 == 0:
                     # print(
                     #     f"Cmd: [{self.commands[0,0]:.2f}, "
@@ -687,7 +953,7 @@ class DodoEnvironment:
                     #     f"Applied Torque: [{self.robot.get_dofs_control_force()}"
                     #     f"Actual Torque: [{self.robot.get_dofs_force()}"
                     # )
-                    #print(self.base_pos[0, 2], reward_cfg.get("base_height_target", 0.55))
+                    # print(self.base_pos[0, 2], reward_cfg.get("base_height_target", 0.55))
                     pass
     
 
@@ -799,10 +1065,9 @@ class DodoEnvironment:
         print("Tracing model...")
         with torch.no_grad():
             try:
-                scripted_model = torch.jit.trace(model, example_obs)
-            except Exception:
-                print("Trace failed, using script instead...")
                 scripted_model = torch.jit.script(model)
+            except Exception:
+                scripted_model = torch.jit.trace(model, example_obs)
 
         jit_path = os.path.splitext(checkpoint_path)[0] + ".jit.pt"
         scripted_model.save(jit_path)
@@ -871,7 +1136,7 @@ class DodoEnvironment:
     # -----------------------------------------------------------------------------
     # Logging and plotting of RL training
     # -----------------------------------------------------------------------------
-    def dodo_train_walking(
+    def dodo_train(
             self, 
             resume_from: str | None = None,
             ):
@@ -1103,7 +1368,10 @@ class DodoEnvironment:
                     reward = stats["episode_reward_mean"]
                     length = stats["episode_length_mean"]
                     vx = stats.get("mean_vx", 0.0)
-                    metric = 1000.0 * vx + 10 * reward + 0.5 * length # Skalierungsfaktoren, weil vx=0.1 und reward ca. =10 und length ca. =1000 
+                    fallen_frac = stats.get("fallen_frac", 0.0)
+
+                    metric = 500.0 * vx + 8.0 * reward + 0.6 * length - 180.0 * fallen_frac # Skalierungsfaktoren, weil vx=0.1 und reward ca. =10 und length ca. =1000 -> FOR WALKING
+                    #metric = 10.0 * reward + 1.0 * length - 200.0 * stats.get("fallen_frac", 0.0)  # FOR STANDING
 
 
                     if metric > best_metric:
@@ -1178,7 +1446,7 @@ class DodoEnvironment:
         self.robot.set_dofs_kp(kp, self.motors_dof_idx)
         self.robot.set_dofs_kv(kd, self.motors_dof_idx)
 
-        torque_limit = 10.0  # oder was in deiner Hand-Demo gut funktioniert
+        torque_limit = 7.0  # oder was in deiner Hand-Demo gut funktioniert
         self.robot.set_dofs_force_range(
             lower=- torque_limit * torch.ones(self.num_actions, dtype=torch.float32),
             upper= torque_limit * torch.ones(self.num_actions, dtype=torch.float32),
@@ -1386,14 +1654,16 @@ class DodoEnvironment:
         self._resample_commands(env_ids_torch)
 
         # DOF-States in Buffern resetten
-        self.dof_pos[env_ids_torch] = self.default_dof_pos
+        noise = 0.02 * torch.randn_like(self.dof_pos[env_ids_torch])
+        #noise = torch.clamp(noise, -0.03, 0.03)
+        self.dof_pos[env_ids_torch] = self.default_dof_pos.unsqueeze(0) + noise # add small noise to default pose for better exploration after reset
         self.dof_vel[env_ids_torch] = 0.0
 
         # DOF-Posen in Genesis setzen
-        poses = self.default_dof_pos.detach().cpu().numpy().reshape(1, -1)
-        poses = np.repeat(poses, len(env_ids_np), axis=0)
+        #poses = self.default_dof_pos.detach().cpu().numpy().reshape(1, -1)
+        #poses = np.repeat(poses, len(env_ids_np), axis=0)
         self.robot.set_dofs_position(
-            position=poses,
+            position=self.dof_pos[env_ids_torch].detach().cpu().numpy(),
             dofs_idx_local=self.motors_dof_idx,
             envs_idx=env_ids_np,
             zero_velocity=True,
@@ -1421,7 +1691,7 @@ class DodoEnvironment:
         all_ids_np = all_ids_torch.cpu().numpy()
 
         # DOFs in den Buffern auf Default
-        self.dof_pos[:] = self.default_dof_pos
+        self.dof_pos[:] = self.default_dof_pos + 0.02 * torch.randn_like(self.dof_pos) # add small noise to default pose for better exploration after reset
         self.dof_vel[:] = 0.0
 
         # Default-Winkel auch in Genesis setzen (alle Envs)
@@ -1542,9 +1812,12 @@ class DodoEnvironment:
         base_lin_vel = self.base_lin_vel * self.obs_config_dataclass.obs_scales.lin_vel
         base_ang_vel = self.base_ang_vel * self.obs_config_dataclass.obs_scales.ang_vel
         base_height = self.base_pos[:, 2:3]  # (N,1)
-        dof_pos = self.dof_pos * self.obs_config_dataclass.obs_scales.dof_pos
+        #dof_pos = self.dof_pos * self.obs_config_dataclass.obs_scales.dof_pos
+        dof_pos = (self.dof_pos - self.default_dof_pos) * self.obs_config_dataclass.obs_scales.dof_pos
         dof_vel = self.dof_vel * self.obs_config_dataclass.obs_scales.dof_vel
         joint_torques = self.last_torques
+        #last_actions = self.last_actions * self.obs_config_dataclass.obs_scales.dof_pos
+        last_actions = self.last_actions
         commands = self.commands * self.commands_scale
         proj_grav = self.projected_gravity  # (N,3)
 
@@ -1561,9 +1834,7 @@ class DodoEnvironment:
         clock = torch.cat([clock_sin, clock_cos], dim=-1)           # (N,2)
 
         obs = torch.cat(
-            (base_lin_vel, base_ang_vel, base_height, proj_grav, dof_pos, dof_vel, joint_torques, commands, clock),
-            dim=-1
-        )
+            (base_lin_vel, base_ang_vel, proj_grav, dof_pos, dof_vel, last_actions, commands), dim=-1) # TODO add base_height and clock to the observations if you want to use them
 
         self.obs_buf[:] = obs
         return self.obs_buf, {"observations": {"critic": obs.clone()}}
@@ -1607,7 +1878,7 @@ class DodoEnvironment:
         """
         v = torch.norm(self.commands[:, 0:2], dim=1)
         vmin = 0.03   # darunter: wie "stehen"
-        vmax = 0.15   # darüber: voller gait reward
+        vmax = 0.17   # darüber: voller gait reward
         return torch.clamp((v - vmin) / (vmax - vmin), 0.0, 1.0)
     
     def _abduction_gate(self):
@@ -1696,91 +1967,37 @@ class DodoEnvironment:
 
     @register_reward()
     def _reward_foot_swing_clearance(self):
-        # """
-        # Belohnung für Fuß‑Höhenüberschuss im Swing.
-        # """
-        # hs = self.current_ankle_heights
-        # contact = (hs < self.CONTACT_HEIGHT).float()
-        # swing_mask = 1.0 - contact
-        # clearance = hs * swing_mask
-        # excess = torch.relu(clearance - self.reward_config_dataclass.clearance_target) 
-        # return torch.mean(excess, dim=1)
         """
-        Gauß-Reward für Fußhöhe im Swing um eine Zielhöhe.
-
-        - Nur Swing-Phasen (kein Bodenkontakt) tragen zum Reward bei
-        - Maximaler Reward, wenn die Fußhöhe nahe `clearance_target` liegt
-        - Zu niedrige UND zu hohe Swing-Höhen werden schlechter belohnt
+        Command-konditionierter Swing-Clearance Reward.
+        - bei v_cmd klein: kleine gewünschte Clearance
+        - bei v_cmd groß: gewünschte Clearance nahe clearance_target
+        Reward ist hoch, wenn die Swing-Höhe der Swing-Füße zur gewünschten Höhe passt.
         """
-        # hs = self.current_ankle_heights              # shape (N, 2) für linkes/rechtes Fußgelenk
-        # contact = (hs < self.CONTACT_HEIGHT).float() # 1 = Kontakt, 0 = kein Kontakt
-        # swing_mask = 1.0 - contact                   # 1 = Swing, 0 = Kontakt
+        g = self._gait_gate()                                  # (N,)
 
-        # # Nur die Höhen der Füße im Swing interessieren
-        # clearance = hs * swing_mask
-
-        # target = self.reward_config_dataclass.clearance_target
-        # # Breite der Glocke: z.B. halbe Zielhöhe, kannst du nach Geschmack tunen
-        # sigma = 0.4 * target  
-
-        # # Gauß um die Zielhöhe
-        # err = (clearance - target) ** 2
-        # per_foot = torch.exp(-err / (2 * sigma**2 + 1e-8))
-
-        # # Kontakte sollen gar keinen Reward bekommen
-        # per_foot = per_foot * swing_mask
-
-        # # Mittelwert über beide Füße → shape (N,)
-        # return per_foot.mean(dim=1)
-        
-        
-        # gate = self._gait_gate()
-
-        # hs = self.current_ankle_heights
-        # contact = (hs < self.CONTACT_HEIGHT).float()
-        # swing_mask = 1.0 - contact
-
-        # clearance = hs * swing_mask
-        # target = self.reward_config_dataclass.clearance_target
-        # sigma = 0.2 * target
-
-        # err = (clearance - target) ** 2
-        # per_foot = torch.exp(-err / (2 * sigma**2 + 1e-8))
-        # per_foot = per_foot * swing_mask
-
-        # return gate * per_foot.mean(dim=1)
-
-        """
-        Command-konditionierter Swing-Clearance Reward (Mismatch-Form):
-        - bei v_cmd ~ 0: desired_clearance ~ 0  (ruhig stehen, keine hohen Swings)
-        - bei v_cmd groß: desired_clearance ~ clearance_target
-        Reward ist hoch, wenn die Swing-Höhe zur gewünschten Höhe passt.
-        """
-        g = self._gait_gate()  # 0..1 abhängig von ||cmd_xy|| :contentReference[oaicite:2]{index=2}
-
-        hs = self.current_ankle_heights                          # (N,2)
-        contact = (hs < self.CONTACT_HEIGHT).float()             # (N,2)
-        swing_mask = 1.0 - contact                               # (N,2)
-
-        # actual swing heights (nur dort wo swing)
-        swing_h = hs * swing_mask                                # (N,2)
+        hs = self.current_ankle_heights                        # (N,2)
+        contact = (hs < self.CONTACT_HEIGHT).float()          # (N,2)
+        swing_mask = 1.0 - contact                            # (N,2)
 
         target = self.reward_config_dataclass.clearance_target
-        desired = (g * target).unsqueeze(1)                      # (N,1) -> broadcast auf (N,2)
 
-        # nur Swing trägt bei; im Stand-Modus (beide in Kontakt) gibt's hier 0 Beitrag -> ok
-        # (Mismatch "viel Swing bei v=0" wird über swing_h vs desired bestraft sobald ein Fuß abhebt)
-        sigma = 0.25 * target + 1e-6
-        err = (swing_h - desired) ** 2
+        # nicht bis exakt 0 runter, damit "gar kein Swing" nicht optimal wird
+        min_clearance = 0.025
+        desired = (min_clearance + g * (target - min_clearance)).unsqueeze(1)
 
+        err = (hs - desired) ** 2
+
+        sigma = 0.02   # oder 0.02
         per_foot = torch.exp(-err / (2 * sigma**2))
-        per_foot = per_foot * swing_mask                         # Kontakte ignorieren
+        per_foot = per_foot * swing_mask
 
-        # Wenn beide Füße Kontakt: swing_mask=0 -> Reward=0.
-        # Das ist okay, weil "stehen" hauptsächlich durch Tracking/Orientation/Height/survive belohnt wird.
-        rew = per_foot.mean(dim=1)
-        #no_swing = (swing_mask.sum(dim=1) < 0.5).float()
-        #rew = torch.clamp(rew + no_swing * 1.0, 0.0, 1.0)
+        num_swing = swing_mask.sum(dim=1).clamp(min=1.0)
+        rew = per_foot.sum(dim=1) / num_swing
+
+        # wenn kein Fuß swingt -> kein Reward
+        no_swing = (swing_mask.sum(dim=1) < 0.5).float()
+        rew = rew * (1.0 - no_swing)
+
         return rew
 
 
@@ -1861,7 +2078,7 @@ class DodoEnvironment:
         Gauß‑Reward für ang. Geschw‑Tracking in z.
         """
         err = (self.commands[:, 2] - self.base_ang_vel[:, 2])**2
-        sigma = self.reward_config_dataclass.tracking_sigma
+        sigma = self.reward_config_dataclass.tracking_sigma * 2.0  # evtl. engeres Tracking für Rotation
         return torch.exp(-err / (2 * sigma**2))
 
 
@@ -1895,6 +2112,7 @@ class DodoEnvironment:
         - 1 kurz vor Timeout (wenn nicht gefallen)
         Timeouts sind okay, Stürze nicht.
         """
+        
         fallen = self._compute_fallen_mask().float()  # 1.0 bei Sturz
         alive  = 1.0 - fallen                          # 1.0 solange nicht gefallen
 
@@ -1905,7 +2123,8 @@ class DodoEnvironment:
         # damit es nicht ganz bei 0 startet: z.B. 0.2..1.0
         per_step = 0.05 + 0.8 * prog
 
-        return alive * per_step
+        return alive * per_step # better for walking
+        #return 1.0 - fallen # better for standing
 
     
     @register_reward()
