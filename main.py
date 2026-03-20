@@ -23,14 +23,17 @@ def main():
     # -----------------------------------------------------------------------------
     # Initialize Genesis
     # -----------------------------------------------------------------------------
-    gs.init(backend=gs.cpu) #gs.cuda or gs.cpu
+    gs.init(backend=gs.cuda) #gs.cuda or gs.cpu
     
 
     # -----------------------------------------------------------------------------
     # Initialize relevant classes and the Dodo Environment
     # -----------------------------------------------------------------------------
-    dodo_path_helper: FileFormatAndPaths = FileFormatAndPaths(robot_file_name="dodobot_v3_simple.urdf") #"dodobot_v3.urdf" or "dodo.xml"
-    
+    #dodo_path_helper: FileFormatAndPaths = FileFormatAndPaths(robot_file_name="dodobot_v3_simple.urdf") #"dodobot_v3.urdf" or "dodo.xml"
+    dodo_path_helper: FileFormatAndPaths = FileFormatAndPaths(robot_file_name="dodo_daimao_simple.urdf") #"dodobot_v3.urdf" or "dodo.xml"
+    print("robot joint names: ",dodo_path_helper.joint_names) # You can use those joint order to do the correct remapping of the joints in dodo_configs.py at "joint_names_mapped"
+    print("robot foot links: ", dodo_path_helper.foot_link_names)
+
     # Create an instance of the DodoEnvironment class, which will handle the simulation, training and evaluation of the Dodo robot.
     dodo_env: DodoEnvironment = DodoEnvironment(
         dodo_path_helper=dodo_path_helper, 
@@ -60,7 +63,7 @@ def main():
     The following function can be used to import the robot in a standing configuration, which is useful for debugging and testing a new URDF file
     or initial parameters like choosing the right spawn position, etc...
     """
-    #dodo_env.import_robot_standing(manual_stepping=False, total_steps=1000, spawn_position=(0.0, 0.0, 0.55))
+    #dodo_env.import_robot_standing(manual_stepping=False, total_steps=1000, spawn_position=(0.0, 0.0, 0.38)) # old dodobot_v3 was (0.0, 0.0, 0.55) new dodo_daimao standing is (0.0, 0.0, 0.38), new dodo_daimao lying is (0.0, 0.0, 0.095)
 
     """
     The following function can be used to train a new model.
@@ -75,7 +78,7 @@ def main():
     The following function can be used to evaluate a trained model.
     The function opens a window with the simulation and visualizes the robot's behavior using the trained model and the given velocity commands.
     """
-    #dodo_env.eval_trained_model(exp_name="dodo-walking-new-009", v_x=0.4, v_y=0.0, v_ang=0.0, model_name="model_final.pt")
+    dodo_env.eval_trained_model(exp_name="daimao_walking_002", v_x=0.4, v_y=0.0, v_ang=0.0, model_name="model_best.pt")
 
     """
     The following function can be used to export an already trained model to a JIT format.
@@ -83,7 +86,7 @@ def main():
 
     -> gs.init(backend=gs.cpu) should be used before loading the JIT model in C++ for sim2sim or sim2real transfer, as the JIT model is exported in a CPU compatible format. 
     """
-    dodo_env.export_checkpoint_to_jit(exp_name="dodo-walking-new-009", model_name="model_final.pt")
+    #dodo_env.export_checkpoint_to_jit(exp_name="dodo-walking-new-009", model_name="model_final.pt")
 
     """
     The following function can be used to resume training from a previously trained checkpoint. 

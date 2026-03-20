@@ -10,7 +10,7 @@ import numpy as np
 # -----------------------------------------------------------------------------
 
 @dataclass
-class DodoJointAngles:
+class DodoJointParams:
     """
     Default joint angles of the Dodo robot (in radians) for each leg joint.
     """
@@ -171,10 +171,12 @@ class EnvCfg:
     general simulation and control parameters used during training/evaluation.
     """
     num_actions: int
-    default_joint_angles: DodoJointAngles
+    default_joint_angles: DodoJointParams
     joint_names_mapped: DodoJointNames
-    kp: float
-    kd: float
+    kp: DodoJointParams
+    kd: DodoJointParams
+    max_torques: DodoJointParams
+    max_velocities: DodoJointParams
     termination_if_roll_greater_than: float
     termination_if_pitch_greater_than: float
     base_init_pos: List[float]
@@ -334,7 +336,7 @@ def init_dodo_configs(
         ),
         runner_class_name=                "OnPolicyRunner",
         # collect at least one gait cycle per env: e.g. 1.0s / dt(0.01) = 100 steps
-        num_steps_per_env=                192, # vorher 256 oder 192
+        num_steps_per_env=                160, # vorher 256 oder 192
         save_interval=                    50,
         empirical_normalization=          True,
         seed=                             1,
@@ -360,17 +362,27 @@ def init_dodo_configs(
     
     env_config_dataclass: EnvCfg = EnvCfg(
         num_actions=                      len(joint_names),
-        default_joint_angles=DodoJointAngles(
-            left_hip=                     0.0,
-            right_hip=                    0.0,
-            left_thigh=                   0.4,
-            right_thigh=                  0.4,
-            left_knee=                    -0.7,
-            right_knee=                   -0.7,
-            left_foot_ankle=              0.3,
-            right_foot_ankle=             0.3
+        # default_joint_angles=DodoJointAngles( # old dodo standing configuration
+        #     left_hip=                     0.0,
+        #     right_hip=                    0.0,
+        #     left_thigh=                   0.4,
+        #     right_thigh=                  0.4,
+        #     left_knee=                    -0.7,
+        #     right_knee=                   -0.7,
+        #     left_foot_ankle=              0.3,
+        #     right_foot_ankle=             0.3
+        # ),
+        default_joint_angles=DodoJointParams( # new dodo configuration in rad
+            left_hip=                     0.0, # standing = 0.0, lying flat = 0.0
+            right_hip=                    0.0, # standing = 0.0, lying flat = 0.0
+            left_thigh=                   0.6, # standing = 0.6, lying flat = 1.57
+            right_thigh=                  0.6, # standing = 0.6, lying flat = 1.57
+            left_knee=                    -1.4, # standing = -1.4, lying flat = -3.14
+            right_knee=                   -1.4, # standing = -1.4, lying flat = -3.14
+            left_foot_ankle=              0.8, # standing = 0.8, lying flat = 1.57
+            right_foot_ankle=             0.8 # standing = 0.8, lying flat = 1.57
         ),
-        joint_names_mapped=DodoJointNames( # The values should be the joint_names from the robot file (URDF or XML) you can hardcode it here if you want to. I am using the joint names that are automatically extracted by the helper function.
+        joint_names_mapped=DodoJointNames( # The values should be the joint_names from the robot file (URDF or XML) you can hardcode it here if you want to. I am using the joint names that are automatically extracted by the helper function. The keys should stay the same because they are used in the rest of the code to access the joints in a unified way independent of the actual joint names in the robot file.
             left_hip=                     joint_names[4],
             right_hip=                    joint_names[0],
             left_thigh=                   joint_names[5],
@@ -380,17 +392,57 @@ def init_dodo_configs(
             left_foot_ankle=              joint_names[7],
             right_foot_ankle=             joint_names[3],
         ),
-        kp=                               130.0,
-        kd=                               1.6 * np.sqrt(130.0), #== 2.0 * np.sqrt(150.0)
+        max_torques=DodoJointParams( # max torques for each joint in Nm
+            left_hip=                     27.0,
+            right_hip=                    27.0,
+            left_thigh=                   27.0,
+            right_thigh=                  27.0,
+            left_knee=                    9.0,
+            right_knee=                   9.0,
+            left_foot_ankle=              9.0,
+            right_foot_ankle=             9.0
+        ),
+        max_velocities=DodoJointParams( # max velocities for each joint in rad/s
+            left_hip=                     6.0,     
+            right_hip=                    6.0,
+            left_thigh=                   6.0,
+            right_thigh=                  6.0,
+            left_knee=                    6.0,
+            right_knee=                   6.0,
+            left_foot_ankle=              6.0,
+            right_foot_ankle=             6.0
+        ),
+        kp=DodoJointParams(
+            left_hip=70.0,
+            right_hip=70.0,
+            left_thigh=110.0,
+            right_thigh=110.0,
+            left_knee=55.0,
+            right_knee=55.0,
+            left_foot_ankle=35.0,
+            right_foot_ankle=35.0,
+        ),
+        kd=DodoJointParams(
+            left_hip=1.4 * np.sqrt(70.0),
+            right_hip=1.4 * np.sqrt(70.0),
+            left_thigh=1.4 * np.sqrt(110.0),
+            right_thigh=1.4 * np.sqrt(110.0),
+            left_knee=1.5 * np.sqrt(55.0),
+            right_knee=1.5 * np.sqrt(55.0),
+            left_foot_ankle=1.6 * np.sqrt(35.0),
+            right_foot_ankle=1.6 * np.sqrt(35.0),
+        ),
+        # kp=                               130.0,
+        # kd=                               1.6 * np.sqrt(130.0), #== 2.0 * np.sqrt(150.0)
         termination_if_roll_greater_than= 30.0,
         termination_if_pitch_greater_than=30.0,
-        base_init_pos=                    [0.0, 0.0, 0.55],
+        base_init_pos=                    [0.0, 0.0, 0.38],
         base_init_quat=                   [1.0, 0.0, 0.0, 0.0],
         episode_length_s=                 10.0,
         resampling_time_s=                10.0,
         action_scale=                     0.7,
         simulate_action_latency=          False,
-        clip_actions=                     1.5, # war 100 -> sinnvoll clampen
+        clip_actions=                     1.3, # war 100 -> sinnvoll clampen
         robot_file_path=                  robot_file_path_relative, # for example: "robot_mjcf": dodo_robot\dodo.xml
         foot_link_names=                  foot_link_names, # for example: ['Left_FOOT_FE', 'Right_FOOT_FE']
         robot_file_format=                robot_file_format,
@@ -427,19 +479,19 @@ def init_dodo_configs(
             #Joint penalties
             hip_abduction_penalty=        0.03,
             #drift and efficiency
-            lateral_drift_penalty=        0.15, # drift in x richtung 
-            action_rate=                  0.0005, # Definiere eine Funktion, die dafür sorgt, dass die gesampleten aktionen nicht zu weit von den vorigen abweichen (smoother trajectory).
+            lateral_drift_penalty=        0.3, # drift in x richtung 
+            action_rate=                  0.0003, # Definiere eine Funktion, die dafür sorgt, dass die gesampleten aktionen nicht zu weit von den vorigen abweichen (smoother trajectory).
             energy_penalty=               0.0,
             step_events=                  1.0,
         ),
         # Hyperparameter für die Gauß‑Formen und Targets
-        tracking_sigma=                   0.08,
-        base_height_target=               0.54,
-        height_sigma=                     0.06,   # Hüfthöhe
-        orient_sigma=                     0.07,   # Roll/Pitch
+        tracking_sigma=                   0.06,
+        base_height_target=               0.37,
+        height_sigma=                     0.08,   # Hüfthöhe
+        orient_sigma=                     0.06,   # Roll/Pitch
         energy_sigma=                     0.035,   # Aktionsänderung
         period=                           1.0,   # Zyklusdauer in s
-        clearance_target=                 0.1,   # m, min. Fußhöhe im Swing
+        clearance_target=                 0.09,   # m, min. Fußhöhe im Swing
         pitch_target=                     0.0,   # rad (~10°), leichter Vorwärts‑Pitch
         pitch_sigma=                      0.07,   # Breite für Pitch‑Reward
         bird_hip_target=                 -0.7,   # rad (~20°) Hüft‑FE‑Baseline nach hinten
@@ -447,16 +499,16 @@ def init_dodo_configs(
         bird_hip_sigma=                   0.12,   # Breite des Hüft‑Phase‑Rewards
         hip_abduction_sigma=              0.12,   # Breite für Hüft‑AA‑Penalty
         drift_sigma=                      0.08,   # Breite für seitliche Drift
-        pitch_threshold=                  40 * pi/180,
-        roll_threshold=                   40 * pi/180,
-        base_height_threshold=            0.37   # If the base height gets lower than that the robot is considered fallen.
+        pitch_threshold=                  45 * pi/180,
+        roll_threshold=                   45 * pi/180,
+        base_height_threshold=            0.23   # If the base height gets lower than that the robot is considered fallen.
     )
 
     command_config_dataclass: CommandCfg = CommandCfg(
         num_commands= 3,
         resampling_time_s= 10,
         command_ranges=CommandRanges(
-            lin_vel_x=[0.0, 0.6],
+            lin_vel_x=[0.0, 0.4],
             lin_vel_y=[0.0, 0.0], 
             ang_vel_yaw=[0.0, 0.0] # for example [-1.0, 1.0]
         )

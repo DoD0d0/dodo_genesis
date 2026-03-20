@@ -26,7 +26,7 @@ class FileFormatAndPaths():
     #     XML = 'xml'
     #     URDF = 'urdf'
 
-    _DEFAULT_ROOT_MARKERS = {"main.py", "dodo_train.py", ".git", "pyproject.toml", "setup.cfg", "requirements.txt"}
+    _DEFAULT_ROOT_MARKERS = {"main.py", ".git", "requirements.txt"}
     _EXCLUDE_DIRS = {".git", ".hg", ".svn", ".venv", "venv", "node_modules", "__pycache__"}
 
     def __init__(self, robot_file_name: str):
@@ -126,26 +126,34 @@ class FileFormatAndPaths():
             'dodobot_v3': WindowsPath('C:/Users/Liamb/SynologyDrive/TUM/3_Semester/dodo_alive/DoDodo/dodobot_v3'), 
             'urdf': WindowsPath('C:/Users/Liamb/SynologyDrive/TUM/3_Semester/dodo_alive/DoDodo/dodobot_v3/urdf')
         """
-
-        required_dirs: Iterable[str] = ("dodo_robot", "dodobot_v3", "urdf")
-        extra_dirs: Iterable[str] = ()
-
         project_root = self._find_project_root()
         result: dict[str, Path] = {
             "project_root": project_root,
             "cwd": Path.cwd().resolve(),
         }
 
-        # Required: must exist
-        for name in required_dirs:
-            result[name] = self._find_dir(project_root, name)
+        robots_folder = result["project_root"] / "robots"
 
-        # Optional: only add if they are found
-        for name in extra_dirs:
-            try:
-                result[name] = self._find_dir(project_root, name)
-            except FileNotFoundError:
-                pass
+        robot_dirs = [p for p in robots_folder.iterdir() if p.is_dir()]
+
+        found = False
+
+        for folder in robot_dirs:
+            matches = list(folder.rglob(self.robot_file_name))
+
+            if matches:
+                result[folder.name] = folder.resolve()
+
+                file_path = matches[0].resolve()
+                result[self.robot_file_format] = file_path.parent
+
+                found = True
+                break
+
+        if not found:
+            raise FileNotFoundError(
+                f"Robot file '{self.robot_file_name}' not found in any subfolder of {robots_folder}"
+            )
 
         return result
 
@@ -261,41 +269,45 @@ class FileFormatAndPaths():
 
         # --- URDF -----------------------------------------------------------
         elif self.robot_file_format == "urdf":
-            # Get all link names
-            all_links: set[str] = set()
-            for link in root.findall(".//link"):
-                name = link.get("name")
-                if name:
-                    all_links.add(name)
-
-            parent_links: set[str] = set()
-            child_links: set[str] = set()
+            parent_links = set()
+            child_links = set()
+            child_to_parent = {}
+            child_to_joint_type = {}
 
             for joint in root.findall(".//joint"):
+                jtype = joint.attrib.get("type", "").lower()
                 parent = joint.find("parent")
                 child = joint.find("child")
-                if parent is not None and parent.get("link"):
-                    parent_links.add(parent.get("link"))
-                if child is not None and child.get("link"):
-                    child_links.add(child.get("link"))
 
-            # End-Links: occur as childs but never as parents
+                parent_name = parent.get("link") if parent is not None else None
+                child_name = child.get("link") if child is not None else None
+
+                if parent_name:
+                    parent_links.add(parent_name)
+                if child_name:
+                    child_links.add(child_name)
+
+                if parent_name and child_name:
+                    child_to_parent[child_name] = parent_name
+                    child_to_joint_type[child_name] = jtype
+
             leaf_links = sorted(child_links - parent_links)
 
-            if not leaf_links:
-                raise RuntimeError(
-                    f"No leaf links (end-effectors) found in URDF at {path}."
-                )
+            resolved_links = []
+            for link in leaf_links:
+                if child_to_joint_type.get(link) == "fixed":
+                    resolved_links.append(child_to_parent[link])
+                else:
+                    resolved_links.append(link)
 
-            # Fordodobot: will probably be left_link_4 and right_link_4.
-            left = [n for n in leaf_links if "left" in n.lower()]
-            right = [n for n in leaf_links if "right" in n.lower()]
+            # doppelte entfernen, Reihenfolge behalten
+            foot_link_names = list(dict.fromkeys(resolved_links))
+
+            left = [n for n in foot_link_names if "left" in n.lower()]
+            right = [n for n in foot_link_names if "right" in n.lower()]
 
             if left or right:
                 foot_link_names = left + right
-            else:
-                # Fallback: take all leaf-links as "feet"
-                foot_link_names = leaf_links
 
             self.foot_link_names = foot_link_names
             return foot_link_names

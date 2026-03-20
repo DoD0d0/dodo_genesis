@@ -9,6 +9,7 @@ import argparse
 import numpy as np
 from pathlib import Path
 from importlib import metadata
+from dataclasses import asdict, is_dataclass
 
 import matplotlib
 matplotlib.use("Agg")   # kein Tkinter, nur offscreen rendering
@@ -51,8 +52,8 @@ def gs_rand_float(lower, upper, shape, device):
 
 
 class DodoEnvironment:
-    CONTACT_HEIGHT = 0.047 # result in debug for "foot on the ground" was (tensor([0.0426, 0.0425], device='cuda:0'))
-    SWING_HEIGHT_THRESHOLD = 0.065 #
+    CONTACT_HEIGHT = 0.05 # DODOBOT_V3: result in debug for "foot on the ground" was (tensor([0.0426, 0.0425], device='cuda:0')) :: DAIMAO: tensor([0.0486, 0.0486], device='cuda:0')
+    SWING_HEIGHT_THRESHOLD = 0.075 #
 
     def __init__(self, 
                  dodo_path_helper: FileFormatAndPaths,
@@ -77,7 +78,6 @@ class DodoEnvironment:
         self._base_components = 3 + 3 + 3    # lin_vel, ang_vel, proj_grav
         self._per_dof_components = 3 * len(self.joint_names_unmapped)  # pos, vel, last_action
         self._command_components = 3
-
         # +2: Clock/Phase (sin, cos) -> damit Periodic-Gait/Phase-Rewards lernbar werden
         self._clock_components = 0 # TODO set to 2 if you want to use clock-based rewards (like periodic gait reward, bird hip phase reward, etc.)
 
@@ -415,16 +415,16 @@ class DodoEnvironment:
 
         self.robot.set_dofs_position(np.array(self.default_joint_angles), self.motors_dof_idx) 
 
-        self.kp = [self.env_config_dataclass.kp] * self.num_actions
-        self.kd = [self.env_config_dataclass.kd] * self.num_actions
+        self.kp = list(asdict(self.env_config_dataclass.kp).values())
+        self.kd = list(asdict(self.env_config_dataclass.kd).values())
         self.robot.set_dofs_kp(self.kp, self.motors_dof_idx)
         self.robot.set_dofs_kv(self.kd, self.motors_dof_idx)
 
-        max_force = 7.0 # Newtonmeter
-        
+
+        max_torques = torch.tensor(list(asdict(self.env_config_dataclass.max_torques).values()), dtype=torch.float32, device=self.device)
         self.robot.set_dofs_force_range(
-            lower=-max_force * torch.ones(self.num_actions, dtype=torch.float32),
-            upper= max_force * torch.ones(self.num_actions, dtype=torch.float32),
+            lower=-max_torques,
+            upper=max_torques,
             dofs_idx_local=self.motors_dof_idx,
         )
 
@@ -439,15 +439,16 @@ class DodoEnvironment:
         q_amp  = 0.8
         freq   = 1.3
         omega  = 2 * np.pi * freq
-        kp     = 50.0  * np.ones(n_dofs, dtype=np.float32)
-        kv     = 2.0 * np.sqrt(kp) 
-        self.robot.set_dofs_kp(kp, self.motors_dof_idx)
-        self.robot.set_dofs_kv(kv, self.motors_dof_idx)
+        self.kp = list(asdict(self.env_config_dataclass.kp).values())
+        self.kd = list(asdict(self.env_config_dataclass.kd).values())
+        self.robot.set_dofs_kp(self.kp, self.motors_dof_idx)
+        self.robot.set_dofs_kv(self.kd, self.motors_dof_idx)
 
+        max_torques = torch.tensor(list(asdict(self.env_config_dataclass.max_torques).values()), dtype=torch.float32, device=self.device)
         self.robot.set_dofs_force_range(
-            lower = -3.0*np.ones(n_dofs, dtype=np.float32),
-            upper =  3.0*np.ones(n_dofs, dtype=np.float32),
-            dofs_idx_local = self.motors_dof_idx,
+            lower=-max_torques,
+            upper=max_torques,
+            dofs_idx_local=self.motors_dof_idx,
         )
 
         dt = self.genesis_scene.sim_options.dt
@@ -483,36 +484,47 @@ class DodoEnvironment:
         self.num_envs = 1
 
         scene = self.create_genesis_scene(show_viewer=True, show_FPS=False)
-        self._init_dodo_scene(scene = scene, spawn_position = spawn_position, terrain_cfg=self.env_config_dataclass.terrain_cfg)
-        
-        n_dofs    = len(self.motors_dof_idx)
-        q_amp  = 0.8
-        freq   = 1.3
-        omega  = 2 * np.pi * freq
-        kp     = 120.0  * np.ones(n_dofs, dtype=np.float32)
-        kv     = 2.0*np.sqrt(kp) 
-        self.robot.set_dofs_kp(kp, self.motors_dof_idx)
-        self.robot.set_dofs_kv(kv, self.motors_dof_idx)
+        self._init_dodo_scene(scene=scene, spawn_position=spawn_position, terrain_cfg=self.env_config_dataclass.terrain_cfg)
+        self._init_buffers()
 
-        self.robot.set_dofs_force_range(
-            lower = -3.0*np.ones(n_dofs, dtype=np.float32),
-            upper =  3.0*np.ones(n_dofs, dtype=np.float32),
-            dofs_idx_local = self.motors_dof_idx,
+        self.kp = list(asdict(self.env_config_dataclass.kp).values())
+        self.kd = list(asdict(self.env_config_dataclass.kd).values())
+        self.robot.set_dofs_kp(self.kp, self.motors_dof_idx)
+        self.robot.set_dofs_kv(self.kd, self.motors_dof_idx)
+
+        max_torques = torch.tensor(
+            list(asdict(self.env_config_dataclass.max_torques).values()),
+            dtype=torch.float32,
+            device=self.device
         )
-        
+        self.robot.set_dofs_force_range(
+            lower=-max_torques,
+            upper=max_torques,
+            dofs_idx_local=self.motors_dof_idx,
+        )
+
+        foot_link_names = self.env_config_dataclass.foot_link_names
+        self.ankle_links = [self.robot.get_link(name) for name in foot_link_names]
 
         try:
             for step in range(total_steps):
                 q_des = self.default_joint_angles
-
                 self.robot.control_dofs_position(q_des, self.motors_dof_idx)
+
                 if manual_stepping:
-                    input("enter to continue…")   # keep this to step manually
-                base_pos = self.robot.get_pos()
-                if manual_stepping:
-                    print(f"[pos ctrl] step {step:4d} → base height = {base_pos[0,2]:.4f} m")
+                    input("enter to continue…")
+
                 self.genesis_scene.step()
-                #print(self.robot.get_pos()[0,2])
+
+                self.current_ankle_heights[:] = torch.stack(
+                    [link.get_pos()[:, 2] for link in self.ankle_links],
+                    dim=1
+                )
+
+                # print ankle heights and contact state
+                print(self.current_ankle_heights[0])
+                print((self.current_ankle_heights[0] < self.CONTACT_HEIGHT).float())
+
         except gs.GenesisException as e:
             if "Viewer closed" in str(e):
                 print("Viewer closed – simulation finished.")
@@ -526,7 +538,6 @@ class DodoEnvironment:
         spawn_position: tuple[float, float, float] = (0.0, 0.0, 0.55),
         kp_value: float = 120.0,
         kd_value: float | None = None,
-        torque_limit: float = 5.0,
         q_amp: float = 0.25,
         freq: float = 2.0,
         test_joint_idx: int = 3,
@@ -582,14 +593,15 @@ class DodoEnvironment:
 
         kp = kp_value * np.ones(n_dofs, dtype=np.float32)
         kv = kd_value * np.ones(n_dofs, dtype=np.float32)
-
         self.robot.set_dofs_kp(kp, self.motors_dof_idx)
         self.robot.set_dofs_kv(kv, self.motors_dof_idx)
+        
+        max_torques = torch.tensor(list(asdict(self.env_config_dataclass.max_torques).values()), dtype=torch.float32, device=self.device)
         self.robot.set_dofs_force_range(
-            lower=-torque_limit * np.ones(n_dofs, dtype=np.float32),
-            upper=torque_limit * np.ones(n_dofs, dtype=np.float32),
+            lower=-max_torques,
+            upper=max_torques,
             dofs_idx_local=self.motors_dof_idx,
-        )
+        ) 
 
         dt = float(self.genesis_scene.sim_options.dt)
         omega = 2.0 * np.pi * freq
@@ -704,6 +716,8 @@ class DodoEnvironment:
                 base_pos = self.robot.get_pos()
                 base_height = float(base_pos[0, 2].detach().cpu().item())
 
+                torque_limit = max_torques[test_joint_idx].item()
+
                 # saturation flag based on commanded torque
                 if np.all(np.isfinite(tau_ctrl)):
                     tau_sat = (np.abs(tau_ctrl) >= 0.98 * torque_limit).astype(np.float32)
@@ -789,6 +803,22 @@ class DodoEnvironment:
             probs=d.get("probs", []),
             uneven=uneven,
         )
+    
+    def _joint_param_to_list(self, x):
+        # Fall 1: Dataclass wie DodoJointParams
+        if is_dataclass(x):
+            return list(asdict(x).values())
+
+        # Fall 2: Dict aus cfgs.pkl
+        if isinstance(x, dict):
+            return list(x.values())
+
+        # Fall 3: einzelner Skalar
+        if isinstance(x, (int, float)):
+            return [float(x)] * self.num_actions
+
+        # Fall 4: schon Liste/Tuple/Array
+        return list(x)
 
     def eval_trained_model(self, v_x: float = 0.5, v_y: float = 0.0, v_ang: float = 0.0, exp_name: str = "dodo-walking", model_name: str = "model_final.pt"):
         """
@@ -837,25 +867,44 @@ class DodoEnvironment:
         # 2) Szene + Roboter mit Werten aus env_cfg initialisieren
         # ------------------------------------------------------------------
         # base_init_pos aus env_cfg-Dict (Fallback auf aktuelle Dataclass falls Key fehlt)
-        spawn_position = env_cfg.get("base_init_pos", getattr(self.env_config_dataclass, "base_init_pos", [0.0, 0.0, 0.55]))
+        spawn_position = env_cfg.get("base_init_pos", getattr(self.env_config_dataclass, "base_init_pos", [0.0, 0.0, 0.38]))
 
         scene = self.create_genesis_scene(show_viewer=True, show_FPS=False)
         self._init_dodo_scene(scene=scene, spawn_position=spawn_position, terrain_cfg=terrain_config_dataclass)
 
-        # PD-Gains aus env_cfg-Dict (Fallback auf Dataclass)
-        kp = env_cfg.get("kp", getattr(self.env_config_dataclass, "kp", 175.0))
-        kd = env_cfg.get("kd", getattr(self.env_config_dataclass, "kd", 2.0 * np.sqrt(175.0)))
+        # # PD-Gains aus env_cfg-Dict (Fallback auf Dataclass)
+        # kp = env_cfg.get("kp", getattr(self.env_config_dataclass, "kp", 175.0))
+        # kd = env_cfg.get("kd", getattr(self.env_config_dataclass, "kd", 2.0 * np.sqrt(175.0)))
 
-        self.kp = [kp] * self.num_actions
-        self.kd = [kd] * self.num_actions
+        # self.kp = [kp] * self.num_actions
+        # self.kd = [kd] * self.num_actions
+        # self.robot.set_dofs_kp(self.kp, self.motors_dof_idx)
+        # self.robot.set_dofs_kv(self.kd, self.motors_dof_idx)
+
+        # # Kraftgrenzen / Torque-Limit aus env_cfg (z.B. clip_actions), sonst Fallback
+        # torque_limit = 7.0 #Newtonmeter
+        # self.robot.set_dofs_force_range(
+        #     lower=- torque_limit * torch.ones(self.num_actions, dtype=torch.float32, device=self.device),
+        #     upper=  torque_limit * torch.ones(self.num_actions, dtype=torch.float32, device=self.device),
+        #     dofs_idx_local=self.motors_dof_idx,
+        # )
+
+        # PD-Gains aus env_cfg-Dict (Fallback auf Dataclass)
+        kp_raw = env_cfg.get("kp", getattr(self.env_config_dataclass, "kp"))
+        kd_raw = env_cfg.get("kd", getattr(self.env_config_dataclass, "kd"))
+        self.kp = self._joint_param_to_list(kp_raw)
+        self.kd = self._joint_param_to_list(kd_raw)
+
         self.robot.set_dofs_kp(self.kp, self.motors_dof_idx)
         self.robot.set_dofs_kv(self.kd, self.motors_dof_idx)
 
-        # Kraftgrenzen / Torque-Limit aus env_cfg (z.B. clip_actions), sonst Fallback
-        torque_limit = 7.0 #Newtonmeter
+        # Torque limits aus env_cfg-Dict (Fallback auf Dataclass)
+        max_torques_raw = env_cfg.get("max_torques", getattr(self.env_config_dataclass, "max_torques"))
+        max_torques = torch.tensor(self._joint_param_to_list(max_torques_raw), dtype=torch.float32, device=self.device)
+
         self.robot.set_dofs_force_range(
-            lower=- torque_limit * torch.ones(self.num_actions, dtype=torch.float32, device=self.device),
-            upper=  torque_limit * torch.ones(self.num_actions, dtype=torch.float32, device=self.device),
+            lower=-max_torques,
+            upper=max_torques,
             dofs_idx_local=self.motors_dof_idx,
         )
 
@@ -936,7 +985,7 @@ class DodoEnvironment:
                 self.commands[:, 1] = v_y
                 self.commands[:, 2] = v_ang
 
-                #print ankle heights and contact state for debugging
+                # #print ankle heights and contact state for debugging
                 # print(self.current_ankle_heights[0]) 
                 # print((self.current_ankle_heights[0] < self.CONTACT_HEIGHT).float())
 
@@ -1426,6 +1475,13 @@ class DodoEnvironment:
         
         self.genesis_scene.build(n_envs=self.num_envs)
 
+        for name in ["foot_left", "foot_right", "foot_sole_left", "foot_sole_right"]:
+            try:
+                self.robot.get_link(name)
+                print("FOUND:", name)
+            except Exception:
+                print("MISSING:", name)
+
         # === Nach scene.build(): Gelenke und Kräfte setzen ===
         self.motors_dof_idx = [self.robot.get_joint(n).dof_start for n in self.joint_names]
 
@@ -1441,15 +1497,15 @@ class DodoEnvironment:
         )
 
 
-        kp = [self.env_config_dataclass.kp] * self.num_actions
-        kd = [self.env_config_dataclass.kd] * self.num_actions
-        self.robot.set_dofs_kp(kp, self.motors_dof_idx)
-        self.robot.set_dofs_kv(kd, self.motors_dof_idx)
+        self.kp = list(asdict(self.env_config_dataclass.kp).values())
+        self.kd = list(asdict(self.env_config_dataclass.kd).values())
+        self.robot.set_dofs_kp(self.kp, self.motors_dof_idx)
+        self.robot.set_dofs_kv(self.kd, self.motors_dof_idx)
 
-        torque_limit = 7.0  # oder was in deiner Hand-Demo gut funktioniert
+        max_torques = torch.tensor(list(asdict(self.env_config_dataclass.max_torques).values()), dtype=torch.float32, device=self.device)
         self.robot.set_dofs_force_range(
-            lower=- torque_limit * torch.ones(self.num_actions, dtype=torch.float32),
-            upper= torque_limit * torch.ones(self.num_actions, dtype=torch.float32),
+            lower=-max_torques,
+            upper=max_torques,
             dofs_idx_local=self.motors_dof_idx,
         )
 
