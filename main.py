@@ -78,7 +78,7 @@ def main():
     The following function can be used to evaluate a trained model.
     The function opens a window with the simulation and visualizes the robot's behavior using the trained model and the given velocity commands.
     """
-    dodo_env.eval_trained_model(exp_name="daimao_walking_002", v_x=0.4, v_y=0.0, v_ang=0.0, model_name="model_best.pt")
+    dodo_env.eval_trained_model(exp_name="daimao_walking_002", v_x=0.2, v_y=0.0, v_ang=0.0, model_name="model_final.pt")
 
     """
     The following function can be used to export an already trained model to a JIT format.
