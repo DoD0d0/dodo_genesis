@@ -9,6 +9,11 @@ The goal is to learn stable and efficient locomotion behaviors (e.g. walking or 
 * evaluation
 * sim2sim / sim2real transfer
 
+
+Example of a trained walking policy:
+
+https://github.com/user-attachments/assets/eed10890-74e9-4e20-ada0-640d650bdb05
+
 ---
 
 ## 🚀 Features
