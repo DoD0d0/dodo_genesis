@@ -985,9 +985,9 @@ class DodoEnvironment:
                 self.commands[:, 1] = v_y
                 self.commands[:, 2] = v_ang
 
-                # #print ankle heights and contact state for debugging
-                # print(self.current_ankle_heights[0]) 
-                # print((self.current_ankle_heights[0] < self.CONTACT_HEIGHT).float())
+                #print ankle heights and contact state for debugging
+                print(self.current_ankle_heights[0]) 
+                print((self.current_ankle_heights[0] < self.CONTACT_HEIGHT).float())
 
                 if self.episode_length_buf[0] % 10 == 0:
                     # print(
@@ -2024,10 +2024,8 @@ class DodoEnvironment:
     @register_reward()
     def _reward_foot_swing_clearance(self):
         """
-        Command-konditionierter Swing-Clearance Reward.
-        - bei v_cmd klein: kleine gewünschte Clearance
-        - bei v_cmd groß: gewünschte Clearance nahe clearance_target
-        Reward ist hoch, wenn die Swing-Höhe der Swing-Füße zur gewünschten Höhe passt.
+        Reward für Swing-Clearance relativ zum Bodenniveau.
+        clearance_target ist jetzt die gewünschte Höhe ÜBER dem Kontakt-Niveau.
         """
         g = self._gait_gate()                                  # (N,)
 
@@ -2035,22 +2033,22 @@ class DodoEnvironment:
         contact = (hs < self.CONTACT_HEIGHT).float()          # (N,2)
         swing_mask = 1.0 - contact                            # (N,2)
 
-        target = self.reward_config_dataclass.clearance_target
+        # relative Clearance statt absolute Welt-z-Höhe
+        clearance = torch.clamp(hs - self.CONTACT_HEIGHT, min=0.0)
 
-        # nicht bis exakt 0 runter, damit "gar kein Swing" nicht optimal wird
-        min_clearance = 0.025
+        target = self.reward_config_dataclass.clearance_target   # jetzt z.B. 0.01 ... 0.03
+        min_clearance = 0.005
         desired = (min_clearance + g * (target - min_clearance)).unsqueeze(1)
 
-        err = (hs - desired) ** 2
+        err = (clearance - desired) ** 2
 
-        sigma = 0.02   # oder 0.02
+        sigma = 0.007
         per_foot = torch.exp(-err / (2 * sigma**2))
         per_foot = per_foot * swing_mask
 
         num_swing = swing_mask.sum(dim=1).clamp(min=1.0)
         rew = per_foot.sum(dim=1) / num_swing
 
-        # wenn kein Fuß swingt -> kein Reward
         no_swing = (swing_mask.sum(dim=1) < 0.5).float()
         rew = rew * (1.0 - no_swing)
 
@@ -2134,7 +2132,7 @@ class DodoEnvironment:
         Gauß‑Reward für ang. Geschw‑Tracking in z.
         """
         err = (self.commands[:, 2] - self.base_ang_vel[:, 2])**2
-        sigma = self.reward_config_dataclass.tracking_sigma * 2.0  # evtl. engeres Tracking für Rotation
+        sigma = self.reward_config_dataclass.tracking_sigma * 1.5  # evtl. engeres Tracking für Rotation
         return torch.exp(-err / (2 * sigma**2))
 
 

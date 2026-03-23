@@ -303,7 +303,7 @@ def init_dodo_configs(
         algorithm=TrainAlgorithm(
             class_name =                  "PPO",
             clip_param =                  0.2,
-            desired_kl =                  0.017,    # <- vorher 0.01
+            desired_kl =                  0.02,    # <- vorher 0.01
             entropy_coef =                0.008,    # <- vorher 0.01
             gamma =                       0.99,    # <- vorher 0.98
             lam =                         0.95,
@@ -439,7 +439,7 @@ def init_dodo_configs(
         base_init_pos=                    [0.0, 0.0, 0.38],
         base_init_quat=                   [1.0, 0.0, 0.0, 0.0],
         episode_length_s=                 10.0,
-        resampling_time_s=                10.0,
+        resampling_time_s=                5.0,
         action_scale=                     0.7,
         simulate_action_latency=          False,
         clip_actions=                     1.3, # war 100 -> sinnvoll clampen
@@ -462,34 +462,34 @@ def init_dodo_configs(
     reward_config_dataclass: RewardCfg = RewardCfg(
         reward_scales=RewardScales(
             #velocity tracking
-            tracking_lin_vel=             7.0,
-            tracking_ang_vel=             4.0,
+            tracking_lin_vel=             5.0,
+            tracking_ang_vel=             5.0,
             #stability and posture
-            orientation_stability=        0.3,
-            base_height=                  0.4,
-            survive=                      0.17,
-            fall_penalty=                 50.0,
+            orientation_stability=        0.4,
+            base_height=                  0.5,
+            survive=                      0.2,
+            fall_penalty=                 60.0,
             vertical_stability=           0.06,  # oder 0.05 zum Start. hüpfen
             #gait-shaping (bird style)
             periodic_gait=                0.0,
-            foot_swing_clearance=         0.6,
+            foot_swing_clearance=         2.0,
             knee_extension_at_push=       0.0,
             bird_hip_phase=               0.0,
             forward_torso_pitch=          0.0,
             #Joint penalties
-            hip_abduction_penalty=        0.03,
+            hip_abduction_penalty=        0.05,
             #drift and efficiency
-            lateral_drift_penalty=        0.3, # drift in x richtung 
-            action_rate=                  0.0003, # Definiere eine Funktion, die dafür sorgt, dass die gesampleten aktionen nicht zu weit von den vorigen abweichen (smoother trajectory).
-            energy_penalty=               0.0,
+            lateral_drift_penalty=        0.0, # drift in x richtung 
+            action_rate=                  0.000, # Definiere eine Funktion, die dafür sorgt, dass die gesampleten aktionen nicht zu weit von den vorigen abweichen (smoother trajectory).
+            energy_penalty=               0.05,
             step_events=                  1.0,
         ),
         # Hyperparameter für die Gauß‑Formen und Targets
-        tracking_sigma=                   0.06,
+        tracking_sigma=                   0.12,
         base_height_target=               0.37,
-        height_sigma=                     0.08,   # Hüfthöhe
-        orient_sigma=                     0.06,   # Roll/Pitch
-        energy_sigma=                     0.035,   # Aktionsänderung
+        height_sigma=                     0.07,   # Hüfthöhe
+        orient_sigma=                     0.08,   # Roll/Pitch
+        energy_sigma=                     0.15,   # Aktionsänderung
         period=                           1.0,   # Zyklusdauer in s
         clearance_target=                 0.09,   # m, min. Fußhöhe im Swing
         pitch_target=                     0.0,   # rad (~10°), leichter Vorwärts‑Pitch
@@ -497,7 +497,7 @@ def init_dodo_configs(
         bird_hip_target=                 -0.7,   # rad (~20°) Hüft‑FE‑Baseline nach hinten
         bird_hip_amp=                     0.35,   # rad (~8°) Zyklus‑Amplitude
         bird_hip_sigma=                   0.12,   # Breite des Hüft‑Phase‑Rewards
-        hip_abduction_sigma=              0.12,   # Breite für Hüft‑AA‑Penalty
+        hip_abduction_sigma=              0.13,   # Breite für Hüft‑AA‑Penalty
         drift_sigma=                      0.08,   # Breite für seitliche Drift
         pitch_threshold=                  45 * pi/180,
         roll_threshold=                   45 * pi/180,
@@ -506,11 +506,11 @@ def init_dodo_configs(
 
     command_config_dataclass: CommandCfg = CommandCfg(
         num_commands= 3,
-        resampling_time_s= 10,
+        resampling_time_s= 5,
         command_ranges=CommandRanges(
-            lin_vel_x=[0.0, 0.4],
-            lin_vel_y=[0.0, 0.0], 
-            ang_vel_yaw=[0.0, 0.0] # for example [-1.0, 1.0]
+            lin_vel_x=[0.0, 0.5],
+            lin_vel_y=[0.0, 0.3], 
+            ang_vel_yaw=[-0.5, 0.5] # for example [-1.0, 1.0]
         )
     )
 

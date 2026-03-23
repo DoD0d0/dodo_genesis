@@ -30,7 +30,7 @@ def main():
     # Initialize relevant classes and the Dodo Environment
     # -----------------------------------------------------------------------------
     #dodo_path_helper: FileFormatAndPaths = FileFormatAndPaths(robot_file_name="dodobot_v3_simple.urdf") #"dodobot_v3.urdf" or "dodo.xml"
-    dodo_path_helper: FileFormatAndPaths = FileFormatAndPaths(robot_file_name="dodo_daimao_simple.urdf") #"dodobot_v3.urdf" or "dodo.xml"
+    dodo_path_helper: FileFormatAndPaths = FileFormatAndPaths(robot_file_name="dodo_daimao_simple_2.urdf") #"dodobot_v3.urdf" or "dodo.xml"
     print("robot joint names: ",dodo_path_helper.joint_names) # You can use those joint order to do the correct remapping of the joints in dodo_configs.py at "joint_names_mapped"
     print("robot foot links: ", dodo_path_helper.foot_link_names)
 
@@ -72,13 +72,13 @@ def main():
     Example function call:
     python main.py --num_envs 4096 --max_iterations 150 --exp_name dodo-standing
     """
-    #dodo_env.dodo_train() #Training from scratch (random weights initialization)
+    dodo_env.dodo_train() #Training from scratch (random weights initialization)
 
     """
     The following function can be used to evaluate a trained model.
     The function opens a window with the simulation and visualizes the robot's behavior using the trained model and the given velocity commands.
     """
-    dodo_env.eval_trained_model(exp_name="daimao_walking_002", v_x=0.2, v_y=0.0, v_ang=0.0, model_name="model_final.pt")
+    #dodo_env.eval_trained_model(exp_name="daimao_walking_003", v_x=0.4, v_y=0.0, v_ang=-0.3, model_name="model_final.pt")
 
     """
     The following function can be used to export an already trained model to a JIT format.
