@@ -329,22 +329,22 @@
     <axis
       xyz="0 0 0" />
   </joint>
-  <link
-    name="hip_left">
-    <inertial>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
-      <mass
-        value="0" />
-      <inertia
-        ixx="0"
-        ixy="0"
-        ixz="0"
-        iyy="0"
-        iyz="0"
-        izz="0" />
-    </inertial>
+<link
+  name="hip_left">
+  <inertial>
+    <origin
+      xyz="-0.00935959180540419 0.0120580540612954 -4.61678384464537E-05"
+      rpy="0 0 0" />
+    <mass
+      value="0.428645410212592" />
+    <inertia
+      ixx="0.000176489626110945"
+      ixy="-4.21107338219603E-06"
+      ixz="-1.16971532582114E-07"
+      iyy="0.00018242553146269"
+      iyz="-4.30374159940254E-08"
+      izz="0.000179181141560814" />
+  </inertial>
     <visual>
       <origin
         xyz="0 0 0"
