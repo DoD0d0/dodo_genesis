@@ -985,9 +985,9 @@ class DodoEnvironment:
                 self.commands[:, 1] = v_y
                 self.commands[:, 2] = v_ang
 
-                #print ankle heights and contact state for debugging
-                print(self.current_ankle_heights[0]) 
-                print((self.current_ankle_heights[0] < self.CONTACT_HEIGHT).float())
+                # #print ankle heights and contact state for debugging
+                # print(self.current_ankle_heights[0]) 
+                # print((self.current_ankle_heights[0] < self.CONTACT_HEIGHT).float())
 
                 if self.episode_length_buf[0] % 10 == 0:
                     # print(

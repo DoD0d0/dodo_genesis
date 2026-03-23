@@ -303,8 +303,8 @@ def init_dodo_configs(
         algorithm=TrainAlgorithm(
             class_name =                  "PPO",
             clip_param =                  0.2,
-            desired_kl =                  0.02,    # <- vorher 0.01
-            entropy_coef =                0.008,    # <- vorher 0.01
+            desired_kl =                  0.021,    # <- vorher 0.01
+            entropy_coef =                0.01,    # <- vorher 0.01
             gamma =                       0.99,    # <- vorher 0.98
             lam =                         0.95,
             learning_rate =               1.5e-4,     # <- vorher 2e-4
@@ -439,7 +439,7 @@ def init_dodo_configs(
         base_init_pos=                    [0.0, 0.0, 0.38],
         base_init_quat=                   [1.0, 0.0, 0.0, 0.0],
         episode_length_s=                 10.0,
-        resampling_time_s=                5.0,
+        resampling_time_s=                4.0,
         action_scale=                     0.7,
         simulate_action_latency=          False,
         clip_actions=                     1.3, # war 100 -> sinnvoll clampen
@@ -506,11 +506,11 @@ def init_dodo_configs(
 
     command_config_dataclass: CommandCfg = CommandCfg(
         num_commands= 3,
-        resampling_time_s= 5,
+        resampling_time_s= 4.0,
         command_ranges=CommandRanges(
-            lin_vel_x=[0.0, 0.5],
-            lin_vel_y=[0.0, 0.3], 
-            ang_vel_yaw=[-0.5, 0.5] # for example [-1.0, 1.0]
+            lin_vel_x=[-0.2, 0.5],
+            lin_vel_y=[-0.3, 0.3], 
+            ang_vel_yaw=[-1.0, 1.0] # for example [-1.0, 1.0]
         )
     )
 
