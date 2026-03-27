@@ -72,13 +72,13 @@ def main():
     Example function call:
     python main.py --num_envs 4096 --max_iterations 150 --exp_name dodo-standing
     """
-    dodo_env.dodo_train() #Training from scratch (random weights initialization)
+    #dodo_env.dodo_train() #Training from scratch (random weights initialization)
 
     """
     The following function can be used to evaluate a trained model.
     The function opens a window with the simulation and visualizes the robot's behavior using the trained model and the given velocity commands.
     """
-    #dodo_env.eval_trained_model(exp_name="daimao_walking_003", v_x=0.4, v_y=0.2, v_ang=-0.8, model_name="model_final.pt")
+    dodo_env.eval_trained_model(exp_name="daimao_walking_003", v_x=0.3, v_y=0.0, v_ang=-0.0, model_name="model_final.pt")
 
     """
     The following function can be used to export an already trained model to a JIT format.

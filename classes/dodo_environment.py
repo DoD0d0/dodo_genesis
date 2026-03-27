@@ -978,6 +978,8 @@ class DodoEnvironment:
                 actions = policy(obs)
                 obs, rews, dones, infos = self.step(actions)
 
+                #print(f"Obs: {obs[0].cpu().numpy()}")
+
                 # Wenn du sicherstellen willst, dass Commands NIE resampled werden
                 # (falls deine step-Logik Commands updatet), kannst du hier
                 # jedes Mal wieder setzen:
