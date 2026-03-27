@@ -22,11 +22,8 @@ class FileFormatAndPaths():
     editing joint name lists. The class guarantees that the setup works everywhere
     and stays consistent even if file structures change.
     """
-    # class ChooseFileFormat(str, Enum):
-    #     XML = 'xml'
-    #     URDF = 'urdf'
 
-    _DEFAULT_ROOT_MARKERS = {"main.py", ".git", "requirements.txt"}
+    _DEFAULT_ROOT_MARKERS = {"main.py", ".git", "requirements.txt", "README.md", ".gitignore"}
     _EXCLUDE_DIRS = {".git", ".hg", ".svn", ".venv", "venv", "node_modules", "__pycache__"}
 
     def __init__(self, robot_file_name: str):
@@ -40,8 +37,6 @@ class FileFormatAndPaths():
         self.joint_names: list[str] = self._get_joint_names()
         self.foot_link_names: list[str] = self._get_foot_link_names()
         self.robot_file_path_relative: Path = self._get_relative_robot_file_path()
-        
-        #self.mapped_joint_names_dict: dict[str, str] = self._get_mapped_joint_names()
 
         # protected members
 
@@ -300,7 +295,7 @@ class FileFormatAndPaths():
                 else:
                     resolved_links.append(link)
 
-            # doppelte entfernen, Reihenfolge behalten
+            # remove duplicates while preserving order
             foot_link_names = list(dict.fromkeys(resolved_links))
 
             left = [n for n in foot_link_names if "left" in n.lower()]
@@ -325,16 +320,3 @@ class FileFormatAndPaths():
         return self.robot_file_path_absolute.relative_to(
             self.relevant_paths_dict["project_root"]
         )
-    
-      
-    
-# testcase = FileFormatAndPaths(robot_file_format=FileFormatAndPaths.ChooseFileFormat.XML)
-# jnt_angles = testcase.set_default_joint_angles_dict(default_angles=[0.0, 0.0, 0.6, 0.6, 1.1, 1.1, 0.0, 0.0])
-
-# # print("dict: ", testcase.relevant_paths_dict)
-# # print("file format: ", testcase.robot_file_format)
-# print("robot file format: ", testcase.robot_file_format)
-# print("joint names: ", testcase.joint_names)
-# print("default joint angle 2: ", testcase.default_joint_angles)
-
-# print("foot link names: ", testcase.foot_link_names)

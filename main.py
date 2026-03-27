@@ -84,7 +84,7 @@ def main():
     The following function can be used to export an already trained model to a JIT format.
     This JIT is neccessary for sim2sim and sim2real transfer, as it can be loaded in C++ and is not dependent on the Python environment.
 
-    -> gs.init(backend=gs.cpu) should be used before loading the JIT model in C++ for sim2sim or sim2real transfer, as the JIT model is exported in a CPU compatible format. 
+    IMPORTANT -> gs.init(backend=gs.cpu) should be used before loading the JIT model in C++ for sim2sim or sim2real transfer, as the JIT model is exported in a CPU compatible format!!!
     """
     #dodo_env.export_checkpoint_to_jit(exp_name="daimao_walking_003", model_name="model_final.pt")
 

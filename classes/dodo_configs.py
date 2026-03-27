@@ -4,15 +4,16 @@ from numpy import pi
 import numpy as np
 
 
-# -------------------------------------
+# -----------------------------------------------------------------------------
 # Use Dataclasses for Programming 
 # They can be converted into normal dicts if necessary.
+# This was done to avoid the long dicts and avoid spelling mistakes in the keys. You can access the parameters with dot notation, which is more convenient and less error-prone.
 # -----------------------------------------------------------------------------
 
 @dataclass
 class DodoJointParams:
     """
-    Default joint angles of the Dodo robot (in radians) for each leg joint.
+    Default joint parametersof the Dodo robot for each leg joint.
     """
     left_hip: float
     right_hip: float
@@ -27,10 +28,10 @@ class DodoJointParams:
 class DodoJointNames:
     """
     Joint name mapping used by the simulator/URDF/MJCF for each Dodo leg joint.
-    The Key is the naming convention, this programm is using.
-    The values corresponding to the keys should be the joint names used in the URDF or the XML file!
+    The KEYS are the naming convention, this programm is using.
+    The corresponding VALUES should be the joint names used in the URDF or the XML file your are currently using!
 
-    -> The class "FileFormatAndPaths" can be used to extract the joint names from those files!
+    -> The class "FileFormatAndPaths" can be used to extract the joint names from those files! You just need to do the remapping.
     """
     left_hip: str
     right_hip: str
@@ -55,6 +56,7 @@ class DodoObservations:
 class RewardScales:
     """
     Per-term scaling factors that weight the individual reward components.
+    If you add a new reward term, you should add a new entry here and also in the reward function in dodo_environment.py
     """
     tracking_lin_vel: float
     tracking_ang_vel: float
@@ -131,6 +133,7 @@ class TrainRunner:
 
 # -----------------------------------------------------------------------------
 # Terrain Configs
+# -----------------------------------------------------------------------------
 
 @dataclass
 class UnevenTerrainCfg:
@@ -190,6 +193,8 @@ class EnvCfg:
     foot_link_names: List[str]
     robot_file_format: str
     terrain_cfg: TerrainCfg
+    contact_height: float
+    init_pose_noise: float
 
 
 @dataclass
@@ -281,7 +286,9 @@ def init_dodo_configs(
     """
     This function can be used to directly create and return all configs that are relevant for the DODO training as dataclasses.
     You can easily create a dataclass object on your own and use that.
-    This function can be used it should in good values for training walking to the dodo.
+    This function can be used it should have good values for training walking using the dodo.
+
+    JUST CHANGE THE VALUES IN THIS FUNCTION IF YOU WANT TO CHANGE THE CONFIGS FOR THE TRAINING.
     
     :param exp_name: Name of the experiment
     :type exp_name: str
@@ -302,25 +309,25 @@ def init_dodo_configs(
     train_config_dataclass: TrainCfg = TrainCfg(
         algorithm=TrainAlgorithm(
             class_name =                  "PPO",
-            clip_param =                  0.2,
-            desired_kl =                  0.021,    # <- vorher 0.01
-            entropy_coef =                0.01,    # <- vorher 0.01
-            gamma =                       0.99,    # <- vorher 0.98
-            lam =                         0.95,
-            learning_rate =               1.5e-4,     # <- vorher 2e-4
-            max_grad_norm =               1.0,    # <- vorher 1.0
-            num_learning_epochs =         4,      # <- vorher 8
-            num_mini_batches =            8,        # split big batch into many mini-batches
-            schedule =                    "adaptive",
-            use_clipped_value_loss =      True,
-            value_loss_coef =             1.0 # <- vorher 1.0
+            clip_param =                  0.2,        # PPO clipping parameter epsilon, which limits how much the policy can change in one update.
+            desired_kl =                  0.021,      # KL divergence target for adaptive KL penalty. If the actual KL divergence after an update is greater than this value, the update will be penalized to keep the policy changes within a reasonable range.
+            entropy_coef =                0.01,       # Coefficient for the entropy bonus, which encourages exploration by adding a term to the loss function that rewards higher entropy (more randomness) in the action distribution.
+            gamma =                       0.99,       # Discount factor for future rewards, which determines how much the agent values future rewards compared to immediate rewards. A value close to 1 means the agent will consider long-term rewards more strongly.
+            lam =                         0.95,       # GAE lambda parameter for advantage estimation, which controls the bias-variance tradeoff in the Generalized Advantage Estimation (GAE) method. A value close to 1 will use more of the future rewards for advantage estimation, while a value close to 0 will rely more on the immediate reward.
+            learning_rate =               1.5e-4,     # Learning rate for the optimizer
+            max_grad_norm =               1.0,        # Maximum norm for gradient clipping, which helps to prevent exploding gradients during training by capping the maximum value of the gradients.
+            num_learning_epochs =         4,          # Number of epochs to perform for each update, which determines how many times the entire batch of collected data will be used to update the policy in one iteration.
+            num_mini_batches =            8,          # Number of mini-batches to split the collected data into for each update. This is used in conjunction with num_learning_epochs to determine how the data is shuffled and fed into the optimizer. More batches === smaller batch size per batch === more updates per iteration but also more noise in the updates (can be beneficial for exploration and avoid local optima).
+            schedule =                    "adaptive", # Learning rate schedule, which can be "constant", "linear", "adaptive", etc. "adaptive" means the learning rate will be adjusted based on the KL divergence between the old and new policies to keep updates stable.
+            use_clipped_value_loss =      True,       # Whether to use a clipped value loss, which is a technique to stabilize training by clipping the value function updates in a similar way to how the policy updates are clipped in PPO.
+            value_loss_coef =             1.0         # Coefficient for the value loss term in the overall loss function, which determines how much the value function error contributes to the total loss during training.
         ),
         init_member_classes={},
         policy=TrainPolicy(
             activation=                   "elu",
             actor_hidden_dims=            [512, 256, 128],
             critic_hidden_dims=           [512, 256, 128],
-            init_noise_std=               0.20,     # <- vorher 0.15
+            init_noise_std=               0.20,     
             class_name=                   "ActorCritic"
         ),
         runner=TrainRunner(
@@ -335,8 +342,8 @@ def init_dodo_configs(
         run_name=                       ""
         ),
         runner_class_name=                "OnPolicyRunner",
-        # collect at least one gait cycle per env: e.g. 1.0s / dt(0.01) = 100 steps
-        num_steps_per_env=                160, # vorher 256 oder 192
+        # collect at least one gait cycle per env: e.g. 1.0s / dt(0.01) = 100 steps 
+        num_steps_per_env=                160, # previous 192 -> longer rollouts === bigger batch size === higher time consumption per iteration.
         save_interval=                    50,
         empirical_normalization=          True,
         seed=                             1,
@@ -361,7 +368,7 @@ def init_dodo_configs(
     )
     
     env_config_dataclass: EnvCfg = EnvCfg(
-        num_actions=                      len(joint_names),
+        num_actions= len(joint_names),
         # default_joint_angles=DodoJointAngles( # old dodo standing configuration
         #     left_hip=                     0.0,
         #     right_hip=                    0.0,
@@ -372,7 +379,7 @@ def init_dodo_configs(
         #     left_foot_ankle=              0.3,
         #     right_foot_ankle=             0.3
         # ),
-        default_joint_angles=DodoJointParams( # new dodo configuration in rad
+        default_joint_angles=DodoJointParams( # new dodo daimao configuration in rad
             left_hip=                     0.0, # standing = 0.0, lying flat = 0.0
             right_hip=                    0.0, # standing = 0.0, lying flat = 0.0
             left_thigh=                   0.6, # standing = 0.6, lying flat = 1.57
@@ -412,7 +419,7 @@ def init_dodo_configs(
             left_foot_ankle=              6.0,
             right_foot_ankle=             6.0
         ),
-        kp=DodoJointParams(
+        kp=DodoJointParams( 
             left_hip=70.0,
             right_hip=70.0,
             left_thigh=110.0,
@@ -432,77 +439,78 @@ def init_dodo_configs(
             left_foot_ankle=1.6 * np.sqrt(35.0),
             right_foot_ankle=1.6 * np.sqrt(35.0),
         ),
-        # kp=                               130.0,
-        # kd=                               1.6 * np.sqrt(130.0), #== 2.0 * np.sqrt(150.0)
         termination_if_roll_greater_than= 30.0,
         termination_if_pitch_greater_than=30.0,
         base_init_pos=                    [0.0, 0.0, 0.38],
         base_init_quat=                   [1.0, 0.0, 0.0, 0.0],
         episode_length_s=                 10.0,
         resampling_time_s=                4.0,
-        action_scale=                     0.7,
-        simulate_action_latency=          False,
-        clip_actions=                     1.3, # war 100 -> sinnvoll clampen
-        robot_file_path=                  robot_file_path_relative, # for example: "robot_mjcf": dodo_robot\dodo.xml
-        foot_link_names=                  foot_link_names, # for example: ['Left_FOOT_FE', 'Right_FOOT_FE']
-        robot_file_format=                robot_file_format,
-        terrain_cfg=                      terrain_config_dataclass
+        action_scale=                     0.7, 
+        simulate_action_latency=          False, 
+        clip_actions=                     1.3,                          # clamp actions to this value (after scaling), to avoid exploding actions. Actions are offsets to the init pose and in rad, most joints have limits of around 1.5 rad, it does not make sense to have actions that are greater than that, it can also destabilize the training if the actions are too big in the beginning.
+        robot_file_path=                  robot_file_path_relative,     # for example: "robot_mjcf": dodo_robot\dodo.xml
+        foot_link_names=                  foot_link_names,              # for example: ['Left_FOOT_FE', 'Right_FOOT_FE']
+        robot_file_format=                robot_file_format,            # for example "xml" or "urdf"
+        terrain_cfg=                      terrain_config_dataclass, 
+        contact_height=                   0.05,                         # m, if the foot is lower than that it is considered in contact with the ground.
+        init_pose_noise=                  0.02                          # std of the noise added to the initial joint angles after reset for better exploration and more robust policies (tested values up to 0.04, but it can cause convergence issues if it is too high
     )    
     
     obs_config_dataclass: ObsCfg = ObsCfg(
         num_obs=                          num_obs,
         obs_scales=DodoObservations(
             lin_vel=                      2.0,
-            ang_vel=                      0.25, #-> vorher 0.6
+            ang_vel=                      0.25, 
             dof_pos=                      1.0,
             dof_vel=                      0.05
         )
     )
 
     reward_config_dataclass: RewardCfg = RewardCfg(
+        # All reward functions are defined at the bottom of the dodo_environment.py file!
         reward_scales=RewardScales(
             #velocity tracking
-            tracking_lin_vel=             5.0,
-            tracking_ang_vel=             5.0,
-            #stability and posture
-            orientation_stability=        0.4,
-            base_height=                  0.5,
-            survive=                      0.2,
-            fall_penalty=                 60.0,
-            vertical_stability=           0.06,  # oder 0.05 zum Start. hüpfen
+            tracking_lin_vel=             5.0,    # reward: track commanded linear velocity
+            tracking_ang_vel=             5.0,    # reward: track commanded angular velocity
+            #stability and posture   
+            orientation_stability=        0.4,    # reward: keep stable orientation (not rolling or pitching)
+            base_height=                  0.5,    # reward: keep the base at a desired height
+            survive=                      0.2,    # reward: survive many steps
+            fall_penalty=                 60.0,   # penalty: avoid falling
+            vertical_stability=           0.06,   # penalty: avoid jumping
             #gait-shaping (bird style)
-            periodic_gait=                0.0,
-            foot_swing_clearance=         2.0,
-            knee_extension_at_push=       0.0,
-            bird_hip_phase=               0.0,
-            forward_torso_pitch=          0.0,
+            periodic_gait=                0.0,    # reward: follow a periodic gait pattern (defined in dodo_environment.py)
+            foot_swing_clearance=         2.0,    # reward: keep enough foot clearance during swing phase to avoid tripping
+            knee_extension_at_push=       0.0,    # reward: extend the knee during the push-off phase for more propulsion
+            bird_hip_phase=               0.0,    # reward: move the hip in a bird-like manner (defined in dodo_environment.py)
+            forward_torso_pitch=          0.0,    # reward: lean the torso forward during walking
             #Joint penalties
-            hip_abduction_penalty=        0.05,
+            hip_abduction_penalty=        0.05,   # penalty: avoid hip abduction from the initial pose
             #drift and efficiency
-            lateral_drift_penalty=        0.0, # drift in x richtung 
-            action_rate=                  0.000, # Definiere eine Funktion, die dafür sorgt, dass die gesampleten aktionen nicht zu weit von den vorigen abweichen (smoother trajectory).
-            energy_penalty=               0.05,
-            step_events=                  1.0,
+            lateral_drift_penalty=        0.0,    # penalty: avoid lateral drift -> only usefull if cmd_vel_y is zero
+            action_rate=                  0.000,  # penalty: avoid changing actions too quickly, which can be a sign of an unstable policy and can also damage the motors in real life -> It can reduce jitter
+            energy_penalty=               0.05,   # penalty: similar to action_rate penalty -> Only use one of them.
+            step_events=                  1.0,    # reward: reward for each step event
         ),
-        # Hyperparameter für die Gauß‑Formen und Targets
-        tracking_sigma=                   0.12,
-        base_height_target=               0.37,
-        height_sigma=                     0.07,   # Hüfthöhe
-        orient_sigma=                     0.08,   # Roll/Pitch
-        energy_sigma=                     0.15,   # Aktionsänderung
-        period=                           1.0,   # Zyklusdauer in s
-        clearance_target=                 0.09,   # m, min. Fußhöhe im Swing
-        pitch_target=                     0.0,   # rad (~10°), leichter Vorwärts‑Pitch
-        pitch_sigma=                      0.07,   # Breite für Pitch‑Reward
-        bird_hip_target=                 -0.7,   # rad (~20°) Hüft‑FE‑Baseline nach hinten
-        bird_hip_amp=                     0.35,   # rad (~8°) Zyklus‑Amplitude
-        bird_hip_sigma=                   0.12,   # Breite des Hüft‑Phase‑Rewards
-        hip_abduction_sigma=              0.13,   # Breite für Hüft‑AA‑Penalty
-        drift_sigma=                      0.08,   # Breite für seitliche Drift
-        pitch_threshold=                  45 * pi/180,
-        roll_threshold=                   45 * pi/180,
-        base_height_threshold=            0.23   # If the base height gets lower than that the robot is considered fallen.
-    )
+        # Hyperparameters for the shaping functions in the reward terms
+        base_height_target=               0.37,           # m, Hip height target
+        base_height_threshold=            0.23,           # m, if the base height gets lower than that the robot is considered fallen.
+        clearance_target=                 0.09,           # m, target foot clearance during swing phase
+        period=                           1.0,            # s, Cycle period for the periodic gait reward in seconds
+        bird_hip_target=                 -0.7,            # rad, Hip target for the bird style gait
+        bird_hip_amp=                     0.35,           # rad, cyclic amplitude for the bird hip movement
+        pitch_target=                     0.0,            # rad, target torso pitch angle (leaning forward/backward)
+        pitch_threshold=                  45 * pi/180,    # rad, if the torso pitch angle gets greater than that the robot is considered fallen.
+        roll_threshold=                   45 * pi/180,    # rad, if the torso roll angle gets greater than that the robot is considered fallen.
+        orient_sigma=                     0.08,           # sigma, Roll/Pitch sigma
+        height_sigma=                     0.07,           # sigma, Hip height sigma
+        pitch_sigma=                      0.07,           # sigma, Pitch reward
+        energy_sigma=                     0.15,           # sigma, changing actions
+        tracking_sigma=                   0.12,           # sigma, Velocity tracking
+        bird_hip_sigma=                   0.12,           # sigma, bird hip reward
+        hip_abduction_sigma=              0.13,           # sigma, Hip abduction from initial pose
+        drift_sigma=                      0.08,           # sigma,  lateral drift
+    )   
 
     command_config_dataclass: CommandCfg = CommandCfg(
         num_commands= 3,
@@ -539,30 +547,3 @@ def dataclass_to_dict(**kwargs) -> Dict[str, Any]:
 
     # return as tuple so it can be unpacked
     return tuple(result)
-
-
-# (env_config_dataclass,
-# obs_config_dataclass,
-# reward_config_dataclass,
-# command_config_dataclass,
-# train_config_dataclass) = init_dodo_configs(
-#     exp_name="test",
-#     foot_link_names=["dd", "dd", "dd", "dd", "dd", "dd"],
-#     joint_names=["dd", "dd", "dd", "dd", "dd", "dd", "dd", "dd", "dd", "dd", "dd", "dd"],
-#     max_iterations=2,
-#     num_obs=3,
-#     robot_file_format="dd",
-#     robot_file_path_relative="dd",
-# )
-
-# (env_cfg,
-# obs_cfg,
-# reward_cfg,
-# command_cfg,
-# train_cfg,) = dataclass_to_dict(
-#     env_cfg = env_config_dataclass,
-#     obs_cfg = obs_config_dataclass,
-#     reward_cfg = reward_config_dataclass,
-#     command_cfg = command_config_dataclass,
-#     train_cfg = train_config_dataclass,
-# )

@@ -12,7 +12,7 @@ from importlib import metadata
 from dataclasses import asdict, is_dataclass
 
 import matplotlib
-matplotlib.use("Agg")   # kein Tkinter, nur offscreen rendering
+matplotlib.use("Agg")   # No Tkinter, only offscreen rendering
 import matplotlib.pyplot as plt
 
 import genesis as gs
@@ -40,7 +40,7 @@ from classes.file_format_and_paths import FileFormatAndPaths
 REWARD_REGISTRY = {}
 
 def register_reward():
-    """Dekorator für Reward-Methoden; der Key wird automatisch aus dem Methodennamen abgeleitet."""
+    """Decorator for the Reward-Methods; the Key is automatically extracted from the reward-function-names."""
     def wrap(fn):
         key = fn.__name__.removeprefix("_reward_")
         REWARD_REGISTRY[key] = fn
@@ -52,9 +52,6 @@ def gs_rand_float(lower, upper, shape, device):
 
 
 class DodoEnvironment:
-    CONTACT_HEIGHT = 0.05 # DODOBOT_V3: result in debug for "foot on the ground" was (tensor([0.0426, 0.0425], device='cuda:0')) :: DAIMAO: tensor([0.0486, 0.0486], device='cuda:0')
-    SWING_HEIGHT_THRESHOLD = 0.075 #
-
     def __init__(self, 
                  dodo_path_helper: FileFormatAndPaths,
                  exp_name: str = "dodo-walking",
@@ -66,20 +63,22 @@ class DodoEnvironment:
         # -----------------------------------------------------------------------------
         # Public class variables
         # -----------------------------------------------------------------------------
+        # set device and initialize path_helper
         self.device = gs.device
         self.dodo_path_helper: FileFormatAndPaths = dodo_path_helper
         self.exp_name: str = exp_name
         self.num_envs: int = num_envs
         self.max_iterations: int = max_iterations
 
-        self.joint_names_unmapped = dodo_path_helper.joint_names # unsorted list of joint names (Order is exactly like the one in the urdf (from top to bottom))
+        # extract joint names from path_helper, which extracts them from the robot file. So you don't have to hardcode them in multiple places and can easily change the robot file without worrying about inconsistencies in the joint naming.
+        self.joint_names_unmapped = dodo_path_helper.joint_names 
         self.foot_link_names = dodo_path_helper.foot_link_names
 
-        self._base_components = 3 + 3 + 3    # lin_vel, ang_vel, proj_grav
+        # Set observation space dimensions
+        self._base_components = 3 + 3 + 3                              # lin_vel, ang_vel, proj_grav
         self._per_dof_components = 3 * len(self.joint_names_unmapped)  # pos, vel, last_action
-        self._command_components = 3
-        # +2: Clock/Phase (sin, cos) -> damit Periodic-Gait/Phase-Rewards lernbar werden
-        self._clock_components = 0 # TODO set to 2 if you want to use clock-based rewards (like periodic gait reward, bird hip phase reward, etc.)
+        self._command_components = 3                                   # cmd_vel_x, cmd_vel_y, cmd_yaw_rate
+        self._clock_components = 0 # TODO set to 2 if you want to use Clock/Phase (sin, cos) -based rewards (like periodic gait reward, bird hip phase reward, etc.)
 
         self.num_obs = (
             self._base_components
@@ -88,6 +87,7 @@ class DodoEnvironment:
             + self._clock_components
         )
 
+        # Load the configs from the dataclasses defined in dodo_configs.py. This includes all relevant hyperparameters for the environment, the observations, the rewards, the commands and the training. If you want to change any hyperparameter, you can change it in dodo_configs.py and it will be automatically loaded here. 
         (self.env_config_dataclass,
         self.obs_config_dataclass,
         self.reward_config_dataclass,
@@ -102,9 +102,10 @@ class DodoEnvironment:
             robot_file_path_relative=str(self.dodo_path_helper.robot_file_path_relative),
         )
 
-        self.joint_names = list(asdict(self.env_config_dataclass.joint_names_mapped).values()) # sorted list of joint names (order is "left ...", "right" from top to bottom)
+        # sorted list of joint names (order is "left ...", "right" from top to bottom)
+        self.joint_names = list(asdict(self.env_config_dataclass.joint_names_mapped).values()) 
         
-        # Pre-compute joint indices (do this ONCE)
+        # Pre-compute joint indices (do this ONCE) -> Faster than comnputing it on demand.
         self.idx_left_thigh = self.joint_names.index(self.env_config_dataclass.joint_names_mapped.left_thigh)
         self.idx_right_thigh = self.joint_names.index(self.env_config_dataclass.joint_names_mapped.right_thigh)
         self.idx_left_hip = self.joint_names.index(self.env_config_dataclass.joint_names_mapped.left_hip)
@@ -112,6 +113,7 @@ class DodoEnvironment:
         self.idx_left_knee = self.joint_names.index(self.env_config_dataclass.joint_names_mapped.left_knee)
         self.idx_right_knee = self.joint_names.index(self.env_config_dataclass.joint_names_mapped.right_knee)
 
+        # Get some data from the configs
         self.num_actions = self.env_config_dataclass.num_actions
         self.num_commands = self.command_config_dataclass.num_commands
         self.simulate_action_latency = self.env_config_dataclass.simulate_action_latency
@@ -121,6 +123,7 @@ class DodoEnvironment:
         self.obs_scales = self.obs_config_dataclass.obs_scales
         self.reward_scales = self.reward_config_dataclass.reward_scales
 
+        # Initilize relevant variables.
         self.genesis_scene = None
         self.robot = None
         self.motors_dof_idx = None
@@ -129,7 +132,7 @@ class DodoEnvironment:
         self.kd = None
 
         # -----------------------------------------------------------------------------
-        # Global logs (alle wichtigen Reward‑Terme)
+        # Global logs (all relevant Reward‑Terms) 
         # -----------------------------------------------------------------------------
         self.iters = []
         self.val_loss = []
@@ -146,7 +149,7 @@ class DodoEnvironment:
         self.hip_abduction_penalty = []
         self.lateral_drift_penalty = []
 
-        # Dataclass -> Dict konvertieren, damit wir einfach drüber iterieren können
+        # Dataclass -> convert to dict -> iterate over items -> get reward function from registry -> save function and scale in dicts for later use in the reward computation. 
         reward_scales_dict: dict[str, float] = asdict(self.reward_scales)
         self.reward_functions: dict[str, callable] = {}
         self.reward_scales: dict[str, float] = {}
@@ -164,29 +167,6 @@ class DodoEnvironment:
         }
         
         self.disable_command_resampling = False
-
-
-        # -----------------------------------------------------------------------------
-        # Private class variables
-        # -----------------------------------------------------------------------------
-
-
-
-
-        # -----------------------------------------------------------------------------
-        # Wandb (All relevant for logging and plotting the training results)
-        # -----------------------------------------------------------------------------
-
-
-    # -----------------------------------------------------------------------------
-    # Everything that has to do with the Configs for the RL training
-    # -----------------------------------------------------------------------------
-    
-    
-
-    # -----------------------------------------------------------------------------
-    # Create basic genesis scene for the robot
-    # -----------------------------------------------------------------------------
 
     def create_genesis_scene(
             self, 
@@ -212,7 +192,7 @@ class DodoEnvironment:
             show_FPS=True,
             ) -> Scene:
         """
-        Create a new genesis scene and save it inside the object as self.genesis_scene
+        Create a new genesis scene and save it inside the environment object as self.genesis_scene.
         """
         new_scene: Scene = Scene(
             show_viewer=show_viewer,
@@ -223,94 +203,22 @@ class DodoEnvironment:
             show_FPS=show_FPS,
         )
 
-        #self.genesis_scene = new_scene
         return new_scene
-    
-    # def create_and_add_uneven_terrain(self, scene):
-    #     """
-    #     Creates a terrain centered around world origin (0,0,0),
-    #     with a flat "spawn island" around the center and uneven terrain further out.
-    #     """
-
-    #     # -------------------------
-    #     # Größe (für ~10s laufen)
-    #     # -------------------------
-    #     n = 9                  # 9x9 Subterrains
-    #     sub_size = 4.0         # 4m pro Subterrain -> 36m x 36m Gesamtfläche
-    #     # 10s bei ~0.6 m/s ~ 6m; diagonal ~ 8.5m -> 36m ist sehr entspannt.
-
-    #     horizontal_scale = 0.25  # Meter pro Gridzelle
-    #     vertical_scale = 0.008   # Hügelhöhe (klein anfangen)
-
-    #     # -------------------------
-    #     # Flache Spawn-Zone
-    #     # -------------------------
-    #     # radius=1 -> 3x3 Subterrains flach (12m x 12m)
-    #     spawn_flat_radius_sub = 0 # 0 is for just one flat subterrain in the center. 1 is for 3x3 flat subterrains etc.
-    #     c = n // 2  # Zentrum-Index
-
-    #     subterrain_types = []
-    #     for i in range(n):
-    #         row = []
-    #         for j in range(n):
-    #             di = abs(i - c)
-    #             dj = abs(j - c)
-
-    #             # Chebyshev-Distanz => quadratische flache Zone
-    #             if max(di, dj) <= spawn_flat_radius_sub:
-    #                 row.append("flat_terrain")
-    #             else:
-    #                 # "kleine Hügelchen" weiter draußen
-    #                 row.append("random_uniform_terrain")
-    #         subterrain_types.append(row)
-
-    #     # Optional: äußersten Rand flach machen (Debug-freundlich; verhindert fiese Randkanten)
-    #     for k in range(n):
-    #         subterrain_types[0][k] = "flat_terrain"
-    #         subterrain_types[n - 1][k] = "flat_terrain"
-    #         subterrain_types[k][0] = "flat_terrain"
-    #         subterrain_types[k][n - 1] = "flat_terrain"
-
-    #     # -------------------------
-    #     # Zentrierung um (0,0)
-    #     # -------------------------
-    #     total_size = n * sub_size
-    #     terrain_pos = (-0.5 * total_size, -0.5 * total_size, 0.0)
-
-    #     terrain = scene.add_entity(
-    #         morph=gs.morphs.Terrain(
-    #             pos=terrain_pos,  # <-- wichtig: zentriert das Terrain um den Ursprung
-    #             n_subterrains=(n, n),
-    #             subterrain_size=(sub_size, sub_size),
-    #             horizontal_scale=horizontal_scale,
-    #             vertical_scale=vertical_scale,
-    #             subterrain_types=subterrain_types,
-    #             randomize=True,   # optional: Variation (wenn du deterministisch willst -> False)
-    #         ),
-    #     )
-
-    # def create_and_add_plane(self, scene: Scene):
-    #     """
-    #     Create a plane in the given genesis scene
-    #     """
-    #     scene.add_entity(
-    #         morph=gs.morphs.Plane(),
-    #     )
 
     #-------------------------------------------------------------------------------
-    # Helper Funktion for adding different terrains
+    # Helper Function for adding different terrains
     #-------------------------------------------------------------------------------
     def _add_ground(self, scene: Scene, terrain_cfg):
 
         cfg = terrain_cfg
 
-        # Terrain-Typ wählen
+        # Choose terraintype
         if cfg.mode == "random":
             terrain_type = np.random.choice(cfg.options, p=cfg.probs)
         else:
             terrain_type = cfg.mode
 
-        self.current_terrain_type = terrain_type  # optional fürs Logging
+        self.current_terrain_type = terrain_type  
 
         ground_mat = gs.surfaces.Default(color=(0.35, 0.35, 0.35))  # grau
 
@@ -372,7 +280,6 @@ class DodoEnvironment:
     # -----------------------------------------------------------------------------
     # Import the robot into the scene and hardcode the joint movements
     # -----------------------------------------------------------------------------
-
     def _init_dodo_scene(self, scene: Scene, spawn_position: tuple[float, float, float], terrain_cfg:TerrainCfg):
         self.genesis_scene = scene
 
@@ -396,7 +303,6 @@ class DodoEnvironment:
                 #euler = (0, 0, 270),
                 )
             )
-            #jnt_names = ["left_joint_1","right_joint_1","left_joint_2","right_joint_2", "left_joint_3","right_joint_3","left_joint_4","right_joint_4"]
         elif self.dodo_path_helper.robot_file_format == "xml":
             self.robot = self.genesis_scene.add_entity(
                 gs.morphs.MJCF(
@@ -405,22 +311,25 @@ class DodoEnvironment:
                     #euler = (0, 0, 270),
                 )
             )
-            #jnt_names = ["Left_HIP_AA","Right_HIP_AA","Left_THIGH_FE","Right_THIGH_FE", "Left_KNEE_FE","Right_SHIN_FE","Left_FOOT_ANKLE","Right_FOOT_ANKLE"]
         else:
             raise Exception("Neither 'URDF' nor 'XML' file was loaded. Therefore No robot is loaded into the simulation")
         
+        # build genesis scene after adding all entities.
         self.genesis_scene.build(n_envs=self.num_envs)
 
+        # Get the dofs indices of the motors by their joint names.
         self.motors_dof_idx  = [self.robot.get_joint(n).dof_start for n in self.joint_names]
 
+        # Set the robot to its defined default pose
         self.robot.set_dofs_position(np.array(self.default_joint_angles), self.motors_dof_idx) 
 
+        # Set Controller gains defined in the configs
         self.kp = list(asdict(self.env_config_dataclass.kp).values())
         self.kd = list(asdict(self.env_config_dataclass.kd).values())
         self.robot.set_dofs_kp(self.kp, self.motors_dof_idx)
         self.robot.set_dofs_kv(self.kd, self.motors_dof_idx)
 
-
+        # Set torque limits defined in the configs
         max_torques = torch.tensor(list(asdict(self.env_config_dataclass.max_torques).values()), dtype=torch.float32, device=self.device)
         self.robot.set_dofs_force_range(
             lower=-max_torques,
@@ -429,7 +338,15 @@ class DodoEnvironment:
         )
 
 
+    # -----------------------------------------------------------------------------
+    # Some Helper / Eval Functions
+    # -----------------------------------------------------------------------------
     def import_robot_sim(self, manual_stepping: bool = False, total_steps: int = 2000, spawn_position: tuple[float, float, float] = (0.0, 0.0, 0.55)):
+        """
+        Helper function to test if the robot is correctly imported into the Genesis scene and if the joints can be moved. 
+        The joints will move in a sinusoidal pattern, which is defined in this function. 
+        You can use this function to debug the robot import and the controller implementation before starting with the training. 
+        """
         self.num_envs = 1
 
         scene = self.create_genesis_scene(show_viewer=True, show_FPS=True)
@@ -458,11 +375,6 @@ class DodoEnvironment:
                 t = step * dt
                 q_des = q_amp * np.sin(omega * t) * np.ones(n_dofs, dtype=np.float32)
 
-                # q_des[1::2] *= -1    # alle ungeraden Indizes negieren
-                # q_des[0] = 0
-                # q_des[1] = 0
-
-
                 self.robot.control_dofs_position(q_des, self.motors_dof_idx)
                 if manual_stepping:
                     input("enter to continue…")   # keep this to step manually
@@ -477,10 +389,12 @@ class DodoEnvironment:
                 raise
 
     # -----------------------------------------------------------------------------
-    # Import the robot into the scene and hardcode the joint movements
-    # -----------------------------------------------------------------------------
-
     def import_robot_standing(self, manual_stepping: bool = False, total_steps: int = 2000, spawn_position: tuple[float, float, float] = (0.0, 0.0, 0.55)):
+        """
+        Helper function to test if the robot can stand in the Genesis scene with a simple PD controller.
+        You can evaluate a stable "standing" init position using this function.
+        """
+        
         self.num_envs = 1
 
         scene = self.create_genesis_scene(show_viewer=True, show_FPS=False)
@@ -523,7 +437,7 @@ class DodoEnvironment:
 
                 # print ankle heights and contact state
                 print(self.current_ankle_heights[0])
-                print((self.current_ankle_heights[0] < self.CONTACT_HEIGHT).float())
+                print((self.current_ankle_heights[0] < self.env_config_dataclass.contact_height).float())
 
         except gs.GenesisException as e:
             if "Viewer closed" in str(e):
@@ -531,6 +445,8 @@ class DodoEnvironment:
             else:
                 raise
 
+
+    # -----------------------------------------------------------------------------
     def test_robot_controller(
         self,
         manual_stepping: bool = False,
@@ -551,31 +467,6 @@ class DodoEnvironment:
         - Logs desired position, actual position, error, velocity and control torque
         - Computes MAE / RMSE / max error / torque saturation ratio
         - Optional plotting
-
-        Parameters
-        ----------
-        manual_stepping : bool
-            If True, waits for Enter each step.
-        total_steps : int
-            Number of simulation steps.
-        spawn_position : tuple
-            Robot spawn position.
-        kp_value : float
-            Positional gain for all actuated DOFs.
-        kd_value : float | None
-            Velocity gain for all actuated DOFs. If None, uses 2*sqrt(kp_value).
-        torque_limit : float
-            Symmetric force / torque limit in Nm.
-        q_amp : float
-            Amplitude of the test motion in rad.
-        freq : float
-            Frequency for sine motion in Hz.
-        test_joint_idx : int
-            Local test joint index in self.joint_names.
-        test_mode : str
-            "sine" for sinusoidal target, "step" for step target.
-        plot_results : bool
-            If True, plots the logs at the end.
         """
         self.num_envs = 1
 
@@ -795,6 +686,7 @@ class DodoEnvironment:
                 return None
             raise
 
+    # -----------------------------------------------------------------------------
     def _terrain_cfg_from_dict(self, d: dict) -> TerrainCfg:
         uneven = UnevenTerrainCfg(**d["uneven"])
         return TerrainCfg(
@@ -804,6 +696,7 @@ class DodoEnvironment:
             uneven=uneven,
         )
     
+    # -----------------------------------------------------------------------------
     def _joint_param_to_list(self, x):
         # Fall 1: Dataclass wie DodoJointParams
         if is_dataclass(x):
@@ -820,14 +713,16 @@ class DodoEnvironment:
         # Fall 4: schon Liste/Tuple/Array
         return list(x)
 
+    # -----------------------------------------------------------------------------
     def eval_trained_model(self, v_x: float = 0.5, v_y: float = 0.0, v_ang: float = 0.0, exp_name: str = "dodo-walking", model_name: str = "model_final.pt"):
         """
-        Evaluiert ein trainiertes Modell (Logs unter logs/exp_name) mit festen
-        Kommandos v_x, v_y, v_ang.
+        Evaluates an already trained model by loading the saved configs and the model.pt file. The robot should then execute the learned policy in the Genesis scene. 
+        You can specify the desired
+        Commands v_x, v_y, v_ang.
 
-        WICHTIG:
-        - Es werden die in cfgs.pkl gespeicherten Configs als DICTIONARIES benutzt.
-        - self.*_config_dataclass wird NICHT überschrieben.
+        IMPORTANT:
+        - This function will load the configs from the cfgs.pkl file, which is saved during training. Therefore, the environment will be initialized with the same hyperparameters as during training.
+        - self.*_config_dataclass is NOT overwritten.
         """
         self.num_envs = 1
 
@@ -843,15 +738,13 @@ class DodoEnvironment:
         self.disable_command_resampling = True # disable command resampling during eval
 
         # ------------------------------------------------------------------
-        # 1) Config-Dicts aus Pickle laden
+        # 1. Load configs from pkl.
         # ------------------------------------------------------------------
         root_dir = str(self.dodo_path_helper.relevant_paths_dict["project_root"])
         log_dir = os.path.join(root_dir, "logs", exp_name)
 
         with open(os.path.join(log_dir, "cfgs.pkl"), "rb") as f:
             env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg = pickle.load(f)
-            # Annahme: das sind bereits Dicts; falls nicht, kannst du hier noch
-            # env_cfg = vars(env_cfg) o.Ä. machen.
 
         if "terrain_cfg" in env_cfg:
             terrain_config_dataclass = self._terrain_cfg_from_dict(env_cfg["terrain_cfg"])
@@ -864,32 +757,15 @@ class DodoEnvironment:
 
 
         # ------------------------------------------------------------------
-        # 2) Szene + Roboter mit Werten aus env_cfg initialisieren
+        # 2. Initialize Scene + Robot with values from env_cfg
         # ------------------------------------------------------------------
-        # base_init_pos aus env_cfg-Dict (Fallback auf aktuelle Dataclass falls Key fehlt)
+        # If a key is missing because of a new hyperparameter (e.g. spawn_position), we fall back to the value in the current env_config_dataclass (which should have a default value, so it won't crash).
         spawn_position = env_cfg.get("base_init_pos", getattr(self.env_config_dataclass, "base_init_pos", [0.0, 0.0, 0.38]))
 
         scene = self.create_genesis_scene(show_viewer=True, show_FPS=False)
         self._init_dodo_scene(scene=scene, spawn_position=spawn_position, terrain_cfg=terrain_config_dataclass)
 
-        # # PD-Gains aus env_cfg-Dict (Fallback auf Dataclass)
-        # kp = env_cfg.get("kp", getattr(self.env_config_dataclass, "kp", 175.0))
-        # kd = env_cfg.get("kd", getattr(self.env_config_dataclass, "kd", 2.0 * np.sqrt(175.0)))
-
-        # self.kp = [kp] * self.num_actions
-        # self.kd = [kd] * self.num_actions
-        # self.robot.set_dofs_kp(self.kp, self.motors_dof_idx)
-        # self.robot.set_dofs_kv(self.kd, self.motors_dof_idx)
-
-        # # Kraftgrenzen / Torque-Limit aus env_cfg (z.B. clip_actions), sonst Fallback
-        # torque_limit = 7.0 #Newtonmeter
-        # self.robot.set_dofs_force_range(
-        #     lower=- torque_limit * torch.ones(self.num_actions, dtype=torch.float32, device=self.device),
-        #     upper=  torque_limit * torch.ones(self.num_actions, dtype=torch.float32, device=self.device),
-        #     dofs_idx_local=self.motors_dof_idx,
-        # )
-
-        # PD-Gains aus env_cfg-Dict (Fallback auf Dataclass)
+        # PD-Gains from env_cfg-Dict (Fallback to Dataclass)
         kp_raw = env_cfg.get("kp", getattr(self.env_config_dataclass, "kp"))
         kd_raw = env_cfg.get("kd", getattr(self.env_config_dataclass, "kd"))
         self.kp = self._joint_param_to_list(kp_raw)
@@ -898,7 +774,7 @@ class DodoEnvironment:
         self.robot.set_dofs_kp(self.kp, self.motors_dof_idx)
         self.robot.set_dofs_kv(self.kd, self.motors_dof_idx)
 
-        # Torque limits aus env_cfg-Dict (Fallback auf Dataclass)
+        # Torque limits from env_cfg-Dict (Fallback to Dataclass)
         max_torques_raw = env_cfg.get("max_torques", getattr(self.env_config_dataclass, "max_torques"))
         max_torques = torch.tensor(self._joint_param_to_list(max_torques_raw), dtype=torch.float32, device=self.device)
 
@@ -909,57 +785,48 @@ class DodoEnvironment:
         )
 
         # ------------------------------------------------------------------
-        # 3) Link- und Joint-Informationen aus env_cfg-Dict holen
+        # 3. Load Link and Joint Information from env_cfg-Dict
         # ------------------------------------------------------------------
-        # Fuß-Links für Rewards (wenn vorhanden)
+        # Foot links
         foot_link_names = env_cfg.get(
             "foot_link_names",
             getattr(self.env_config_dataclass, "foot_link_names", []),
         )
         self.ankle_links = [self.robot.get_link(name) for name in foot_link_names]
 
-        # joint_names_mapped aus env_cfg (Dict mit Keys wie "left_hip", "right_hip", ...)
+        # joint_names_mapped from env_cfg (Dict mit Keys wie "left_hip", "right_hip", ...)
         joint_names_mapped = env_cfg.get(
             "joint_names_mapped",
-            {},  # Fallback: leeres Dict
+            {},  # Fallback: empty dict 
         )
 
-        # self.joint_names kommt bei dir aus der URDF-Parsing-Logik
-        # (die lassen wir in Ruhe) – wir nutzen hier NUR die Mapping-Infos
+        # Helper function to get joint indices based on the mapped names
         def _idx(name_key: str):
             joint_name = joint_names_mapped.get(name_key, None)
             if joint_name is None:
                 raise KeyError(f"joint_names_mapped['{name_key}'] fehlt in env_cfg.")
             return self.joint_names.index(joint_name)
 
-        # ACHTUNG: hier nehmen wir an, dass die Keys so heißen wie bisher:
-        #   "left_hip", "right_hip", "left_thigh", "right_thigh", "left_knee", "right_knee"
+        # IMPORTANT: We assume the joint names below. Those are our genesis global joint names definitions (Not the one from the URDF)!
         self.hip_aa_indices = [_idx("left_hip"), _idx("right_hip")]
         self.hip_fe_indices = [_idx("left_thigh"), _idx("right_thigh")]
         self.knee_fe_indices = [_idx("left_knee"), _idx("right_knee")]
 
         # ------------------------------------------------------------------
-        # 4) Buffer initialisieren
+        # 4. Initialize Buffers (Observations, Rewards, Dones, Infos, Commands)
         # ------------------------------------------------------------------
         self._init_buffers()
 
         # ------------------------------------------------------------------
-        # 5) Kommandos setzen (hier verwenden wir NICHT die Dataclass,
-        #    sondern direkt v_x, v_y, v_ang; command_cfg brauchen wir
-        #    nur, wenn du später z.B. ranges für Noise etc. nutzen willst)
+        # 5. Set fixed Commands for evaluation (v_x, v_y, v_ang)
         # ------------------------------------------------------------------
         # Alle Envs bekommen dieselben Kommandos
         self.commands[:, 0] = v_x   # x
         self.commands[:, 1] = v_y   # y
         self.commands[:, 2] = v_ang # yaw
 
-        # Wenn du trotzdem die geladenen Ranges aus command_cfg nutzen willst, z.B.:
-        # cmd_ranges = command_cfg.get("command_ranges", {})
-        # lin_vel_x_range = cmd_ranges.get("lin_vel_x", [v_x, v_x])
-        # usw. – aktuell machen wir aber fixe Kommandos.
-
         # ------------------------------------------------------------------
-        # 6) PPO-Runner + Policy aus Checkpoint laden
+        # 6) PPO-Runner + Load policy from checkpoint
         # ------------------------------------------------------------------
         ckpt = -1
         ckpt_name = f"model_{ckpt}.pt" if ckpt >= 0 else model_name
@@ -969,7 +836,8 @@ class DodoEnvironment:
         policy = runner.get_inference_policy(device=gs.device)
 
         # ------------------------------------------------------------------
-        # 7) Schleife: Policy laufen lassen & ein bisschen Debug-Ausgabe
+        # 7. Loop the policy and restart on "fall"... Some debugging info is printed, like the current commands, the base velocity and the applied torques. 
+        # You can modify this part as you like to print out other information that you find useful for debugging.
         # ------------------------------------------------------------------
         
         obs, _ = self.reset()
@@ -978,11 +846,6 @@ class DodoEnvironment:
                 actions = policy(obs)
                 obs, rews, dones, infos = self.step(actions)
 
-                #print(f"Obs: {obs[0].cpu().numpy()}")
-
-                # Wenn du sicherstellen willst, dass Commands NIE resampled werden
-                # (falls deine step-Logik Commands updatet), kannst du hier
-                # jedes Mal wieder setzen:
                 self.commands[:, 0] = v_x
                 self.commands[:, 1] = v_y
                 self.commands[:, 2] = v_ang
@@ -1018,7 +881,6 @@ class DodoEnvironment:
         so it also works for older policies that were trained with a different
         observation layout (e.g. without clock sin/cos).
         """
-        #self.device = gs.cpu
         root_dir = str(self.dodo_path_helper.relevant_paths_dict["project_root"])
         log_dir = os.path.join(root_dir, "logs", exp_name)
         checkpoint_path = os.path.join(log_dir, model_name)
@@ -1028,11 +890,11 @@ class DodoEnvironment:
 
         print(f"Loading checkpoint: {checkpoint_path}")
 
-        # configs laden
+        # load configs from pkl
         with open(os.path.join(log_dir, "cfgs.pkl"), "rb") as f:
             env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg = pickle.load(f)
 
-        # Checkpoint direkt laden, um die echte Obs-Dimension aus den Gewichten zu lesen
+        # Load the checkpoint directly to read the actual observation dimension from the weights
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
 
         try:
@@ -1046,7 +908,7 @@ class DodoEnvironment:
         print(f"Checkpoint observation dimension: {ckpt_num_obs}")
 
         # ------------------------------------------------------------
-        # Dummy-Env nur für den Runner-Aufbau
+        # Dummy-Env just for exporting the policy. The actual environment won't be used, but we need to create a compatible runner to load the weights and the normalizer.
         # ------------------------------------------------------------
         class DummyExportEnv:
             def __init__(self, num_obs, num_actions, device):
@@ -1079,7 +941,7 @@ class DodoEnvironment:
             device=self.device,
         )
 
-        # Runner auf Basis der Checkpoint-Architektur erzeugen
+        # Create runner
         runner = OnPolicyRunner(
             env=dummy_env,
             train_cfg=train_cfg,
@@ -1087,7 +949,7 @@ class DodoEnvironment:
             device=self.device,
         )
 
-        # Gewichte + Normalizer laden
+        # Load weights and normalizer from checkpoint
         runner.load(checkpoint_path)
 
         policy = runner.alg.actor_critic.actor
@@ -1125,17 +987,17 @@ class DodoEnvironment:
 
         print(f"JIT model saved to: {jit_path}")
 
-    # -----------------------------------------------------------------------------
-    # Logging and plotting of RL training
-    # -----------------------------------------------------------------------------
 
+    # -----------------------------------------------------------------------------
+    # Logging and plotting of RL training (WANDB + local Matplotlib plots every 100 iterations)
+    # -----------------------------------------------------------------------------
     def _wandb_log(self, step, stats):
         # log to the console and W&B
         print(f"[WandB] Iter {step} | reward={stats['episode_reward_mean']:.2f} | loss={stats['value_loss']:.4f}")
         wandb.log(stats, step=step)
 
     def log_and_plot(self, log_dir, it, stats):
-        # 1) Daten anhängen
+        # 1) Attach data
         self.iters.append(it)
         self.val_loss.append(stats["value_loss"])
         self.surrogate_loss.append(stats["surrogate_loss"])
@@ -1151,10 +1013,10 @@ class DodoEnvironment:
         self.hip_abduction_penalty.append(stats.get("hip_abduction_penalty", 0.0))
         self.lateral_drift_penalty.append(stats.get("lateral_drift_penalty", 0.0))
 
-        # 2) Logging an W&B
+        # 2) Logging to W&B
         self._wandb_log(it, stats)
 
-        # 3) Alle 100 Iterationen lokal plotten
+        # 3) Plot locally every 100 iterations
         if it % 100 == 0:
             fig, axes = plt.subplots(3, 5, figsize=(24, 12))
             axes = axes.flatten()
@@ -1185,22 +1047,22 @@ class DodoEnvironment:
 
 
     # -----------------------------------------------------------------------------
-    # Logging and plotting of RL training
+    # Actual Training Loop with PPO using OnPolicyRunner from the GenRL library.
     # -----------------------------------------------------------------------------
     def dodo_train(
             self, 
             resume_from: str | None = None,
             ):
+        """
+         Main training loop for PPO. 
+         We use the OnPolicyRunner from the GenRL library, which handles most of the training logic for us (e.g. collecting experience, computing advantages, updating the policy, etc.). 
+         We just need to provide the environment and specify how to log the results.
+        """
         
-
+        # Create Genesis Scene and initialize the robot.
         self.genesis_scene = self.create_genesis_scene(show_viewer=False, show_FPS=False)
 
-        # env_cfg = self.dataclass_to_dict(dataclass_object=self.env_config_dataclass)
-        # train_cfg = self.dataclass_to_dict(dataclass_object=self.train_config_dataclass)
-        # reward_cfg = self.dataclass_to_dict(dataclass_object=self.reward_config_dataclass)
-        # obs_cfg = self.dataclass_to_dict(dataclass_object=self.obs_config_dataclass)
-        # command_cfg = self.dataclass_to_dict(dataclass_object=self.command_config_dataclass)
-
+        # Initialize the environment with the current env_config_dataclass defined in dodo_configs.py
         (env_cfg,
         obs_cfg,
         reward_cfg,
@@ -1244,6 +1106,8 @@ class DodoEnvironment:
                 train_cfg,
             ], f)
 
+        # Create a custom runner that inherits from OnPolicyRunner and overrides the save and load functions to handle the normalizer states. 
+        # We also add a reference to the outer DodoEnvironment class to access the log_dir for saving checkpoints.
         class CustomRunner(OnPolicyRunner):
             def __init__(self, env, train_cfg, log_dir, device, outer_class: DodoEnvironment):
                 super().__init__(env, train_cfg, log_dir, device)
@@ -1260,7 +1124,7 @@ class DodoEnvironment:
                 if hasattr(self.alg, "lr_scheduler"):
                     checkpoint["scheduler_state_dict"] = self.alg.lr_scheduler.state_dict()
 
-                # Normalizer-States: beide Key-Varianten speichern
+                # Normalizer-States
                 if hasattr(self, "obs_normalizer") and self.obs_normalizer is not None:
                     state = self.obs_normalizer.state_dict()
                     checkpoint["obs_normalizer_state"] = state           # dein Name
@@ -1308,14 +1172,14 @@ class DodoEnvironment:
 
 
             def learn(self, num_learning_iterations, init_at_random_ep_len=False):
-                # Env einmal resetten und erste Beobachtungen holen
+                # Reset env and get initial observations
                 self.env.reset()
                 obs, extras = self.env.get_observations()
                 critic_obs = extras["observations"]["critic"].to(self.device)
                 obs = obs.to(self.device)
                 self.train_mode()
 
-                # ---- Best-Model-Tracking initialisieren ----
+                # ---- Initialize "best model" tracking ----
                 best_metric = -1e9
                 best_model_path = os.path.join(self.log_dir, "model_best.pt")
 
@@ -1335,25 +1199,25 @@ class DodoEnvironment:
                     for _ in range(self.num_steps_per_env):
                         actions = self.alg.act(obs, critic_obs)
 
-                        # Schritt in der Env
+                        # Env step
                         obs, rewards, dones, infos = self.env.step(actions.to(self.env.device))
                         obs = obs.to(self.device)
                         rewards = rewards.to(self.device)
                         dones = dones.to(self.device)
 
-                        # Normalisierung
+                        # Normalize
                         obs = self.obs_normalizer(obs)
                         critic_obs = infos["observations"]["critic"].to(self.device)
                         critic_obs = self.critic_obs_normalizer(critic_obs)
 
-                        # PPO-Rollout updaten
+                        # PPO-Rollout update
                         self.alg.process_env_step(rewards, dones, infos)
 
-                        # Logging-Sammler
+                        # Logging-Collector
                         ep_infos.append(infos["episode"])
                         rewbuffer.append(rewards.mean().item())
 
-                        # globale Statistiken einsammeln
+                        # get global stats
                         if "stats" in infos and infos["stats"] is not None:
                             s = infos["stats"]
                             for key in stat_buffers.keys():
@@ -1364,7 +1228,7 @@ class DodoEnvironment:
                                         val = val.item()
                                     stat_buffers[key].append(float(val))
 
-                        # Echte Episodenlängen aus den Infos ziehen
+                        # get real episode lengths from infos
                         if "episode_info" in infos and infos["episode_info"] is not None:
                             ep_info = infos["episode_info"]
                             lengths = ep_info.get("length", [])
@@ -1378,7 +1242,7 @@ class DodoEnvironment:
                     mv, ms, *_ = self.alg.update()  # mv = value_loss, ms = surrogate_loss
 
                     # -----------------------
-                    # Statistiken bauen
+                    # Build stats dict for logging and plotting
                     # -----------------------
                     if len(lenbuffer) > 0:
                         ep_len_mean = float(np.mean(lenbuffer))
@@ -1393,11 +1257,11 @@ class DodoEnvironment:
                         "episode_length_mean": ep_len_mean,
                     }
 
-                    # Alle Reward-Terms erstmal auf 0 setzen
+                    # Set all reward scales to 0.0 
                     for name in self.env.reward_scales.keys():
                         stats[name] = 0.0
 
-                    # Mittlere Rewards über alle Episoden berechnen
+                    # Calculate mean of each reward component across all episodes in the batch
                     mean_logs = {}
                     for ep in ep_infos:
                         for k, v in ep.items():
@@ -1406,7 +1270,7 @@ class DodoEnvironment:
                     for k, v_list in mean_logs.items():
                         stats[k] = float(np.mean(v_list))
 
-                    # globale Statistiken (fallen_frac, timeout_frac, mean_vx)
+                    # global Stats (fallen_frac, timeout_frac, mean_vx)
                     for key, buf in stat_buffers.items():
                         if len(buf) > 0:
                             stats[key] = float(np.mean(buf))
@@ -1414,7 +1278,7 @@ class DodoEnvironment:
                             stats[key] = 0.0
 
                     # -----------------------
-                    # Bestes Modell speichern
+                    # Save best model based on cutom metric
                     # -----------------------
                     reward = stats["episode_reward_mean"]
                     length = stats["episode_length_mean"]
@@ -1440,7 +1304,6 @@ class DodoEnvironment:
         # -----------------------------------------------------------------------------
         # Prepare Genesis Scene
         # -----------------------------------------------------------------------------
-        #self.genesis_scene.add_entity(gs.morphs.Plane(fixed=True))
 
         self._add_ground(scene=self.genesis_scene, terrain_cfg=self.env_config_dataclass.terrain_cfg) # Add Ground, that is defined inside the dodo_env_config - either plane or uneven terrain for example
 
@@ -1484,14 +1347,14 @@ class DodoEnvironment:
             except Exception:
                 print("MISSING:", name)
 
-        # === Nach scene.build(): Gelenke und Kräfte setzen ===
+        # Set joints and forces after scene.build(), because before build() the dof_indices are not defined yet.
         self.motors_dof_idx = [self.robot.get_joint(n).dof_start for n in self.joint_names]
 
 
         # init_joint_angles ist eine Liste mit 8 Werten (in Joint-Reihenfolge)
         single_pose = np.array(init_joint_angles, dtype=np.float32).reshape(1, -1)  # (1, 8)
         all_poses   = np.repeat(single_pose, self.num_envs, axis=0)                 # (num_envs, 8)
-        # Jetzt für alle Envs gleichzeitig setzen
+        # Set for all envs at the same time
         self.robot.set_dofs_position(
             position=all_poses,
             dofs_idx_local=self.motors_dof_idx,
@@ -1520,54 +1383,11 @@ class DodoEnvironment:
         # === Initialisiere Beobachtungs- und Aktionsspeicher ===
         self._init_buffers()
 
-        # self.commands[:] = gs_rand_float(
-        #     self.command_config_dataclass.command_ranges.lin_vel_x[0],
-        #     self.command_config_dataclass.command_ranges.lin_vel_x[1],
-        #     (self.num_envs, self.num_commands),
-        #     self.device,
-        # )
-
         self._resample_commands(torch.arange(self.num_envs, device=self.device))
 
-        
-        # #######################################
-        # # Train loop -> Outdated version with the 4 different goal speeds.
-        # # Stage‑Loop: nur Commands anpassen, Env wiederverwenden
-        # cumulative_iter = 0
-        # for i, v in enumerate([0.1, 0.3, 0.4, 0.5], start=1):
-        #     iters_stage = int(self.max_iterations * (0.2 if i < 4 else 0.4))
-        #     print(f"=== Stage {i}: Zielgeschwindigkeit {v:.1f} m/s ===")
-        #     self.command_config_dataclass.command_ranges.lin_vel_x = [v, v] 
-        #     self.reset()
-        #     runner = CustomRunner(
-        #         env=self,
-        #         train_cfg=copy.deepcopy(asdict(self.train_config_dataclass)),
-        #         log_dir=log_dir,
-        #         device=gs.device,
-        #         outer_class=self,
-        #     )
-        #     runner.current_learning_iteration = cumulative_iter
-        #     runner.learn(
-        #         num_learning_iterations=cumulative_iter + iters_stage,
-        #         init_at_random_ep_len=(i == 1)
-        #     )
-        #     fname = f"model_stage{i}.pt" if i < 4 else "model_final.pt"
-        #     runner.save(os.path.join(log_dir, fname))
-        #     cumulative_iter += iters_stage
-
-        # print(f"=== Trained model saved at {log_dir}/model_final.pt ===")
-
-        #######################################
-        # Train loop – einfache Version mit nur einer Zielgeschwindigkeit
-        # fixe Zielgeschwindigkeit für geradeaus laufen
-
-        # self.command_config_dataclass.command_ranges.lin_vel_x = [0.1, 0.5]
-        # self.command_config_dataclass.command_ranges.lin_vel_y = [0.0, 0.0]
-        # self.command_config_dataclass.command_ranges.ang_vel_yaw = [0.0, 0.0]
-
-        # Env einmal sauber resetten (inkl. neuem Command)
+        # Reset env and get initial observations
         self.reset()
-        # Ein Runner für das ganze Training
+        # Create the runner object
         runner = CustomRunner(
             env=self,
             train_cfg=copy.deepcopy(asdict(self.train_config_dataclass)),
@@ -1577,10 +1397,10 @@ class DodoEnvironment:
         )
 
         # ========================
-        #  Resume-Logik
+        #  Resume-Logic
         # ========================
         if resume_from is not None and os.path.isfile(resume_from):
-            # bereits trainiertes Modell/Optimizer laden
+            # Load pretrained model and normalizer states from checkpoint
             runner.load(resume_from)
             start_it = runner.current_learning_iteration
             # Wenn keine extra_iterations angegeben: einfach nochmal max_iterations drauf
@@ -1590,7 +1410,7 @@ class DodoEnvironment:
             print(f"[DodoEnvironment] 🔁 Continuing training from iter {start_it} "
                 f"for {extra_iterations} more iterations (up to {total_iters}).")
         else:
-            # Frisches Training
+            # Fresh training from scratch
             total_iters = self.max_iterations
             init_random = True
             print(f"[DodoEnvironment] 🚀 Fresh training for {total_iters} iterations.")
@@ -1601,7 +1421,7 @@ class DodoEnvironment:
             init_at_random_ep_len=init_random,
         )
 
-        # Finale Gewichte abspeichern (neuer Name, damit du sie unterscheiden kannst)
+        # Save final model after training is done
         final_path = os.path.join(log_dir, "model_final.pt")
         runner.save(final_path)
         print(f"=== Trained model saved at {final_path} ===")
@@ -1609,8 +1429,7 @@ class DodoEnvironment:
 
 
     def _init_buffers(self):
-        #env_cfg = self.dataclass_to_dict(self.env_config_dataclass)
-        #env_cfg = dataclass_to_dict(env_cfg = self.env_config_dataclass)
+        """ Initialize all necessary buffers for observations, rewards, dones, commands, etc."""
         N, A, C = self.num_envs, self.num_actions, self.num_commands
         self.base_lin_vel = torch.zeros((N, 3), device=self.device)
         self.base_ang_vel = torch.zeros((N, 3), device=self.device)
@@ -1618,7 +1437,6 @@ class DodoEnvironment:
         self.global_gravity = torch.tensor([0.0, 0.0, -1.0], device=self.device).repeat(N,1)
         self.obs_buf = torch.zeros((N, self.num_obs), device=self.device)
         self.rew_buf = torch.zeros((N,), device=self.device)
-        #self.reset_buf = torch.ones((N,), dtype=torch.int32, device=self.device)
         self.reset_buf = torch.zeros((N,), dtype=torch.int32, device=self.device)
         self.episode_length_buf = torch.zeros((N,), dtype=torch.int32, device=self.device)
         self.commands = torch.zeros((N, C), device=self.device)
@@ -1657,6 +1475,7 @@ class DodoEnvironment:
         self.extras = {"observations": {}}
 
     def _resample_commands(self, env_ids):
+        """ Resample commands for the given env_ids. This is called during reset to assign new target velocities to the Envs that are being reset."""
         # env_ids: Tensor mit Indizes der Envs, die gerade resampled werden sollen
         low, high = self.command_config_dataclass.command_ranges.lin_vel_x
         self.commands[env_ids,0] = gs_rand_float(low, high, (len(env_ids),), self.device)
@@ -1666,14 +1485,19 @@ class DodoEnvironment:
         self.commands[env_ids,2] = gs_rand_float(low, high, (len(env_ids),), self.device)
 
     def _update_robot_state(self):
-        # 1) Torques (aktuell noch 0)
+        """
+        GET OBSERVATIONS from simulation:
+        Update the robot state from Genesis and store it in the corresponding buffers. 
+        This is called after reset and every step to keep the state up to date for reward calculation and observation construction.
+        """
+        # 1) Torques (currently 0)
         self.last_torques = torch.zeros_like(self.dof_pos)
 
-        # 2) Basis-Pos & -Orientierung
+        # 2) Base-Pos & -Orientation (Quaternions)
         self.base_pos[:] = self.robot.get_pos()
         self.base_quat[:] = self.robot.get_quat()
 
-        # 3) Basis-Geschwindigkeiten in Körperkoordinaten
+        # 3) Base velocities in body coordinates
         inv_q = inv_quat(self.base_quat)
         self.projected_gravity[:] = transform_by_quat(self.global_gravity, inv_q)
         self.base_lin_vel[:] = transform_by_quat(self.robot.get_vel(), inv_q)
@@ -1682,11 +1506,11 @@ class DodoEnvironment:
         # 4) Euler-Winkel (rad)
         self.base_euler[:] = quat_to_xyz(self.base_quat)
 
-        # 5) DOF-Pos & -Vel (nur Motor-DOFs)
+        # 5) DOF-Pos & -Vel (only Motor-DOFs)
         self.dof_pos[:] = self.robot.get_dofs_position()[..., self.motors_dof_idx]
         self.dof_vel[:] = self.robot.get_dofs_velocity()[..., self.motors_dof_idx]
 
-        # 6) Knöchel-Höhen
+        # 6) Ankle Heights (für Floor-contact-Check)
         self.current_ankle_heights[:] = torch.stack(
             [link.get_pos()[:, 2] for link in self.ankle_links],
             dim=1
@@ -1694,6 +1518,7 @@ class DodoEnvironment:
 
 
     def reset_idx(self, env_ids):
+        """ Reset function for a subset of environments specified by env_ids. This is called internally when an episode ends (done=True) to reset only the environments that need to be reset, while keeping the others running."""
         if isinstance(env_ids, torch.Tensor):
             env_ids_torch = env_ids.to(device=self.device, dtype=torch.long)
             env_ids_np = env_ids_torch.detach().cpu().numpy()
@@ -1701,25 +1526,21 @@ class DodoEnvironment:
             env_ids_np = np.array(env_ids, dtype=np.int64)
             env_ids_torch = torch.from_numpy(env_ids_np).to(self.device)
 
-        # Physik resetten
+        # Reset physics
         self.genesis_scene.reset(envs_idx=env_ids_np)
 
-        # Buffer zurücksetzen
+        # Reset Buffer
         self.episode_length_buf[env_ids_torch] = 0
-        # self.reset_buf[env_ids_torch] = 0  # <- nicht mehr machen!
 
-        # neue Kommandos
+        # New Commands
         self._resample_commands(env_ids_torch)
 
         # DOF-States in Buffern resetten
-        noise = 0.02 * torch.randn_like(self.dof_pos[env_ids_torch])
-        #noise = torch.clamp(noise, -0.03, 0.03)
+        noise = self.env_config_dataclass.init_pose_noise * torch.randn_like(self.dof_pos[env_ids_torch])
         self.dof_pos[env_ids_torch] = self.default_dof_pos.unsqueeze(0) + noise # add small noise to default pose for better exploration after reset
         self.dof_vel[env_ids_torch] = 0.0
 
-        # DOF-Posen in Genesis setzen
-        #poses = self.default_dof_pos.detach().cpu().numpy().reshape(1, -1)
-        #poses = np.repeat(poses, len(env_ids_np), axis=0)
+        # Set DOF poses in Genesis
         self.robot.set_dofs_position(
             position=self.dof_pos[env_ids_torch].detach().cpu().numpy(),
             dofs_idx_local=self.motors_dof_idx,
@@ -1727,21 +1548,22 @@ class DodoEnvironment:
             zero_velocity=True,
         )
 
-        # State aktualisieren & neue Obs holen
+        # Update Robot State and get observations
         self._update_robot_state()
 
-        self.prev_contact[:] = (self.current_ankle_heights < self.CONTACT_HEIGHT).float()
+        self.prev_contact[:] = (self.current_ankle_heights < self.env_config_dataclass.contact_height).float()
 
         obs, _ = self.get_observations()
         return obs
 
     def reset(self):
+        """ Reset all environments. This is called at the beginning of training to initialize everything, and can also be called manually if needed."""
         self.reset_buf[:] = 0
         self.episode_length_buf[:] = 0
         for key in self.episode_sums:
             self.episode_sums[key].zero_()
 
-        # Physik für alle Envs resetten
+        # Reset physics for all Envs
         self.genesis_scene.reset()
 
         # alle Env-IDs vorbereiten
@@ -1749,7 +1571,7 @@ class DodoEnvironment:
         all_ids_np = all_ids_torch.cpu().numpy()
 
         # DOFs in den Buffern auf Default
-        self.dof_pos[:] = self.default_dof_pos + 0.02 * torch.randn_like(self.dof_pos) # add small noise to default pose for better exploration after reset
+        self.dof_pos[:] = self.default_dof_pos + self.env_config_dataclass.init_pose_noise * torch.randn_like(self.dof_pos) # add small noise to default pose for better exploration after reset
         self.dof_vel[:] = 0.0
 
         # Default-Winkel auch in Genesis setzen (alle Envs)
@@ -1763,7 +1585,7 @@ class DodoEnvironment:
         # Zustände aus Genesis holen
         self._update_robot_state()
 
-        self.prev_contact[:] = (self.current_ankle_heights < self.CONTACT_HEIGHT).float()
+        self.prev_contact[:] = (self.current_ankle_heights < self.env_config_dataclass.contact_height).float()
 
         # neue Commands ziehen
         self._resample_commands(all_ids_torch)
@@ -1774,7 +1596,11 @@ class DodoEnvironment:
     
 
     def step(self, actions):
-        # 1) Actions speichern und anwenden
+        """
+        This is the core of the environment interaction. 
+        It takes a batch of actions for all environments, applies them, steps the simulation, computes rewards and done flags, and returns the new observations, rewards, done flags, and any extra info needed for training and logging.
+        """
+        # 1) Save last actions and apply new actions
         self.last_actions[:] = self.actions
         self.actions = torch.clip(
             actions,
@@ -1784,21 +1610,21 @@ class DodoEnvironment:
         target = self.actions * self.env_config_dataclass.action_scale + self.default_dof_pos
         self.robot.control_dofs_position(target, self.motors_dof_idx)
 
-        # 2) Simulationsschritt
+        # 2) Step the simulation forward
         self.genesis_scene.step()
 
-        # 3) Zustände updaten
+        # 3) Update robot state from simulation
         self._update_robot_state()
 
-        # 4) Abbruchkriterien: Timeout vs. echter Sturz
-        timeout = self.episode_length_buf >= self.max_episode_length          # nur Zeit
-        fallen_mask = self._compute_fallen_mask()                             # echte Stürze
-        done = timeout | fallen_mask                                          # Episodenende = eins von beidem
+        # 4) Check termination conditions: Timeout vs. Fallen
+        timeout = self.episode_length_buf >= self.max_episode_length          # just timeout
+        fallen_mask = self._compute_fallen_mask()                             # Real fallen
+        done = timeout | fallen_mask                                          # Episode end = Either timeout OR fallen 
 
-        # reset_buf: "in diesem Schritt ist die Episode zu Ende"
+        # reset_buf: "Episode just ends"
         self.reset_buf = done
 
-        # 5) Rewards berechnen (Survive/Fall nutzen intern nur fallen_mask)
+        # 5) Calculate rewards (Survive/Fall nutzen intern nur fallen_mask)
         self.rew_buf[:] = 0.0
         per_step = {}
         for name, fn in self.reward_functions.items():
@@ -1807,10 +1633,10 @@ class DodoEnvironment:
             self.episode_sums[name] += r
             per_step[name] = r
 
-        # 6) Beobachtungen holen
+        # 6) Get observations
         obs_buf, obs_extras = self.get_observations()
 
-        # 7) Episodenlänge inkrementieren (wichtig: VOR Reset!)
+        # 7) Increment episode length (important: VOR Reset!)
         self.episode_length_buf += 1
 
         # 8) Stats + Episoden-Infos für Logging
@@ -1844,7 +1670,7 @@ class DodoEnvironment:
             "episode_info": episode_info,
         }
 
-        # 9) Kommandos bei Bedarf neu sampeln (optional deaktivierbar)
+        # 9) Resample commands if neccessary.
         if not self.disable_command_resampling:
             resample_every = int(self.command_config_dataclass.resampling_time_s / self.dt)
             mask = (self.episode_length_buf > 0) & (self.episode_length_buf % resample_every == 0)
@@ -1852,21 +1678,26 @@ class DodoEnvironment:
             if idx.numel() > 0:
                 self._resample_commands(idx)
 
-        # 10) Envs mit done == True zurücksetzen
+        # 10) Reset Environments that are done
         done_ids = done.nonzero(as_tuple=False).flatten()
         if done_ids.numel() > 0:
             self.reset_idx(done_ids)
 
-        # 11) (Optional) Debug
+        # 11) Debug prints
         if self.episode_length_buf[0] == 1:
             print("[DEBUG] Observation (env 0):", self.obs_buf[0])
             print("[DEBUG] Action      (env 0):", actions[0])
             print("[DEBUG] Reward      (env 0):", self.rew_buf[0])
 
-        # 12) Ergebnis zurückgeben – done/reset_buf ist hier das Episodenende
+        # 12) Return results
         return self.obs_buf, self.rew_buf, self.reset_buf, self.extras
     
     def get_observations(self):
+        """ 
+        Construct the observation vector from the current robot state and commands. 
+        This is called after reset and every step to provide the new observations for the policy.
+        The resulting vector is basically the input to the neural network!
+        """
         base_lin_vel = self.base_lin_vel * self.obs_config_dataclass.obs_scales.lin_vel
         base_ang_vel = self.base_ang_vel * self.obs_config_dataclass.obs_scales.ang_vel
         base_height = self.base_pos[:, 2:3]  # (N,1)
@@ -1902,48 +1733,49 @@ class DodoEnvironment:
     
     def _compute_fallen_mask(self) -> torch.Tensor:
         """
-        Robuste Fall-Erkennung für bipede Roboter.
+        Robust fallen detection for bipeds:
 
-        Gefallen gilt eine Env dann, wenn:
-        - die Base-Height unter `height_thresh` liegt ODER
-        - Roll ODER Pitch den jeweiligen Threshold überschreiten.
+        An environment is considered fallen if:
+        - The base height is below a certain threshold OR   
+        - The roll OR pitch exceeds their respective thresholds.
 
-        Rückgabe:
-            Bool-Tensor der Form (num_envs,), True = Roboter ist gefallen.
+        Returns:
+            A boolean tensor of shape (num_envs,), where True indicates the robot has fallen.
         """
 
-        # Höhe
+        # Height check
         height = self.base_pos[:, 2]
         too_low = height < self.reward_config_dataclass.base_height_threshold  # z.B. 0.33
 
-        # Orientierung
+        # Orientation check (Roll & Pitch)
         roll = self.base_euler[:, 0]
         pitch = self.base_euler[:, 1]
         roll_thresh = self.reward_config_dataclass.roll_threshold
         pitch_thresh = self.reward_config_dataclass.pitch_threshold
         bad_orientation = (roll.abs() > roll_thresh) | (pitch.abs() > pitch_thresh)
 
-        # gefallen = zu niedrig ODER stark gekippt
+        # fallen if either condition is met
         fallen = too_low | bad_orientation
         return fallen
     
 
     def _gait_gate(self):
         """
-        0 bei Stand / sehr kleinen Commands,
-        1 bei "wirklich laufen".
-        Schwellen kannst du später in configs auslagern.
+        0 at standstill / very small commands,
+        1 at "really walking".
+        You can adapt the thresholds (vmin, vmax) to control how "demanding" the gait reward is.
+        Thresholds are smart because the robot should not step at standstill but should get rewarded for a nice gait when moving fast enough.
         """
         v = torch.norm(self.commands[:, 0:2], dim=1)
-        vmin = 0.03   # darunter: wie "stehen"
-        vmax = 0.17   # darüber: voller gait reward
+        vmin = 0.05   # darunter: wie "stehen"
+        vmax = 0.25   # darüber: voller gait reward
         return torch.clamp((v - vmin) / (vmax - vmin), 0.0, 1.0)
     
     def _abduction_gate(self):
         """
-        Gate für Abduction-Stabilisierung:
-        - voll aktiv bei vy ~ 0
-        - aus bei |vy| >= vy_max
+        Gate for abduction stabilization:
+        - fully active at vy ~ 0
+        - off at |vy| >= vy_max
         """
         vy = torch.abs(self.commands[:, 1])
         vy_max = 0.10   # ab hier: keine Abduction-Einschränkung mehr
@@ -1957,43 +1789,15 @@ class DodoEnvironment:
     @register_reward()
     def _reward_periodic_gait(self):
         """
-        Phasenorientierte Gait‑Shaping‑Belohnung:
-        Linke Stance‑Hälfte, rechte Swing‑Hälfte, dann umgekehrt.
+        Command conditioned periodicity reward (mismatch form):
+        - at v_cmd ~ 0, should NOT walk periodically -> desired_match ~ 0
+        - at high v_cmd, should walk periodically -> desired_match ~ 1
+        Reward is high when actual_match ~ desired_match.
         """
-        # phase = (self.episode_length_buf.float() * self.dt) % self.reward_config_dataclass.period
-        # half = self.reward_config_dataclass.period * 0.5
-        # contact = (self.current_ankle_heights < self.CONTACT_HEIGHT).float()
-        # desired_left = (phase < half).float()
-        # desired_right = (phase >= half).float()
-        # # positiv im Bereich [0,1]
-        # return desired_left * contact[:, 0] + desired_right * contact[:, 1]
-
-
-        # gate = self._gait_gate()
-
-        # phase = (self.episode_length_buf.float() * self.dt) % self.reward_config_dataclass.period
-        # half = self.reward_config_dataclass.period * 0.5
-        # contact = (self.current_ankle_heights < self.CONTACT_HEIGHT).float()  # (N,2)
-
-        # want_left_stance  = (phase < half).float()
-        # want_right_stance = (phase >= half).float()
-
-        # left_match  = want_left_stance  * contact[:,0] + (1-want_left_stance)  * (1-contact[:,0])
-        # right_match = want_right_stance * contact[:,1] + (1-want_right_stance) * (1-contact[:,1])
-
-        # return gate * 0.5 * (left_match + right_match)
-
-
-        """
-        Command-konditionierter Periodik-Reward (Mismatch-Form):
-        - bei v_cmd ~ 0 soll NICHT periodisch gelaufen werden -> desired_match ~ 0
-        - bei v_cmd groß soll periodisch gelaufen werden -> desired_match ~ 1
-        Reward ist hoch, wenn actual_match ~ desired_match.
-        """
-        # 1) Actual "periodic match" aus deinem bestehenden Kontakt-Phasen-Match
+        # 1) Actual "periodic match" 
         phase = (self.episode_length_buf.float() * self.dt) % self.reward_config_dataclass.period
         half = self.reward_config_dataclass.period * 0.5
-        contact = (self.current_ankle_heights < self.CONTACT_HEIGHT).float()  # (N,2)
+        contact = (self.current_ankle_heights < self.env_config_dataclass.contact_height).float()  # (N,2)
 
         want_left_stance  = (phase < half).float()
         want_right_stance = (phase >= half).float()
@@ -2002,11 +1806,11 @@ class DodoEnvironment:
         right_match = want_right_stance * contact[:, 1] + (1 - want_right_stance) * (1 - contact[:, 1])
         match = 0.5 * (left_match + right_match)  # in [0,1]
 
-        # 2) Desired match: wächst mit Command-Speed (dein existing gait_gate ist schon so eine Rampe)
+        # 2) Desired match: 
         desired = self._gait_gate()  # 0..1 abhängig von ||cmd_xy||
 
-        # 3) Mismatch-Penalty als Gauß-Reward um desired
-        # sigma bestimmt, wie "hart" du das Match erzwingst
+        # 3) Mismatch-Penalty (Gauß-Form)
+        # Sigma is a hyperparameter that controls how strictly the reward enforces the desired periodicity.
         sigma = 0.25
         err = (match - desired) ** 2
         return torch.exp(-err / (2 * sigma**2 + 1e-8))
@@ -2015,8 +1819,7 @@ class DodoEnvironment:
     @register_reward()
     def _reward_energy_penalty(self):
         """
-        Energie‑Effizienz als Gauß‑Reward statt -Summe.
-        Minimierung der Aktionsänderungen.
+        Energy penalty as a Gaussian reward on the change in actions (encouraging smoothness and energy efficiency):
         """
         err = torch.sum((self.actions - self.last_actions)**2, dim=1)
         sigma = self.reward_config_dataclass.energy_sigma 
@@ -2026,25 +1829,25 @@ class DodoEnvironment:
     @register_reward()
     def _reward_foot_swing_clearance(self):
         """
-        Reward für Swing-Clearance relativ zum Bodenniveau.
-        clearance_target ist jetzt die gewünschte Höhe ÜBER dem Kontakt-Niveau.
+        Rewarding swing foot clearance relative to the ground level.
+        clearance_target is the desired height ABOVE the contact level.
         """
         g = self._gait_gate()                                  # (N,)
 
         hs = self.current_ankle_heights                        # (N,2)
-        contact = (hs < self.CONTACT_HEIGHT).float()          # (N,2)
+        contact = (hs < self.env_config_dataclass.contact_height).float()          # (N,2)
         swing_mask = 1.0 - contact                            # (N,2)
 
-        # relative Clearance statt absolute Welt-z-Höhe
-        clearance = torch.clamp(hs - self.CONTACT_HEIGHT, min=0.0)
+        # relative Clearance
+        clearance = torch.clamp(hs - self.env_config_dataclass.contact_height, min=0.0)
 
-        target = self.reward_config_dataclass.clearance_target   # jetzt z.B. 0.01 ... 0.03
-        min_clearance = 0.005
+        target = self.reward_config_dataclass.clearance_target 
+        min_clearance = 0.005 
         desired = (min_clearance + g * (target - min_clearance)).unsqueeze(1)
 
         err = (clearance - desired) ** 2
 
-        sigma = 0.007
+        sigma = 0.007 # small sigma because we have a clear target and want to strongly encourage matching it. We also have small values
         per_foot = torch.exp(-err / (2 * sigma**2))
         per_foot = per_foot * swing_mask
 
@@ -2061,7 +1864,7 @@ class DodoEnvironment:
     @register_reward()
     def _reward_forward_torso_pitch(self):
         """
-        Gauß‑Reward für Vorwärts‑Pitch nahe einem Sollwert.
+        Gauß-reward for forward pitch close to a target value.
         """
         pitch = self.base_euler[:, 1]
         err = (pitch - self.reward_config_dataclass.pitch_target)**2  
@@ -2071,24 +1874,15 @@ class DodoEnvironment:
 
     @register_reward()
     def _reward_knee_extension_at_push(self):
-        # """
-        # Belohnt gestrecktes Knie in Standphase (Kontakt).
-        # """
-        # hs = self.current_ankle_heights
-        # stance = (hs < self.CONTACT_HEIGHT).any(dim=1).float()
-        # idx_l = self.joint_names.index(self.env_config_dataclass.joint_names_mapped.left_knee)
-        # idx_r = self.joint_names.index(self.env_config_dataclass.joint_names_mapped.right_knee)
-        # ext_l = 1.0 - torch.relu(-self.dof_pos[:, idx_l])
-        # ext_r = 1.0 - torch.relu(-self.dof_pos[:, idx_r])
-        # return stance * ((ext_l + ext_r) * 0.5)
         """
-        Belohnt (nahezu) gestrecktes Knie in Standphase (Kontakt).
+        Rewarding knee extension at push-off can encourage a more natural and efficient gait, as it promotes better force transmission and energy transfer during walking. 
+        This reward can help the robot learn to extend its knees properly when pushing off the ground, which is crucial for achieving a stable and effective walking pattern.
         """
         gate = self._gait_gate()
 
         hs = self.current_ankle_heights
-        # irgendein Fuß im Kontakt → Standphase
-        stance = (hs < self.CONTACT_HEIGHT).any(dim=1).float()
+        # some foots are in contact if hs < contact_height, so we want to reward knee extension only when we are in the stance phase (not swinging)
+        stance = (hs < self.env_config_dataclass.contact_height).any(dim=1).float()
 
         idx_l = self.idx_left_knee
         idx_r = self.idx_right_knee
@@ -2109,15 +1903,9 @@ class DodoEnvironment:
     @register_reward()
     def _reward_tracking_lin_vel(self):
         """
-        Gauß‑Reward für lin. Geschw‑Tracking in x/y.
+        Gauß-Reward for linear velocity tracking in x/y, based on the squared error between commanded and actual velocity.
         """
-        """ Alte Version
-        v_cmd = self.commands[:, 0]
-        v_x   = self.base_lin_vel[:, 0]
-        sigma = self.reward_config_dataclass.tracking_sigma
-        err   = (v_cmd - v_x)**2
-        """
-        # desired and actual linear velocity in BODY frame (bei dir ist base_lin_vel im Körperframe)
+        # desired and actual linear velocity in BODY frame
         cmd_xy = self.commands[:, 0:2]        # (N,2)
         vel_xy = self.base_lin_vel[:, 0:2]    # (N,2)
 
@@ -2131,7 +1919,7 @@ class DodoEnvironment:
     @register_reward()
     def _reward_tracking_ang_vel(self):
         """
-        Gauß‑Reward für ang. Geschw‑Tracking in z.
+        Gauß Reward for angular velocity tracking in z, based on the squared error between commanded and actual yaw rate. 
         """
         err = (self.commands[:, 2] - self.base_ang_vel[:, 2])**2
         sigma = self.reward_config_dataclass.tracking_sigma * 1.5  # evtl. engeres Tracking für Rotation
@@ -2141,7 +1929,7 @@ class DodoEnvironment:
     @register_reward()
     def _reward_orientation_stability(self):
         """
-        Gauß‑Reward für kleine Roll‑/Pitch‑Abweichung.
+        Gauß-reward for small roll/pitch deviation, encouraging the robot to maintain a stable upright orientation.
         """
         roll = self.base_euler[:, 0] 
         pitch = self.base_euler[:, 1] 
@@ -2153,7 +1941,9 @@ class DodoEnvironment:
     @register_reward()
     def _reward_base_height(self):
         """
-        Gauß‑Reward für Hüfthöhe nahe Ziel.
+        Gauß reward for base height close to a target value. 
+        This encourages the robot to maintain an optimal height, which can be important for stability and energy efficiency. 
+        The reward is high when the base height is close to the target, and decreases as it deviates from the target.
         """
         err = (self.base_pos[:, 2] - self.reward_config_dataclass.base_height_target)**2 
         sigma = self.reward_config_dataclass.height_sigma
@@ -2163,14 +1953,15 @@ class DodoEnvironment:
     @register_reward()
     def _reward_survive(self):
         """
-        Überlebens-Reward, der mit Episodenfortschritt wächst.
-        - 0 am Anfang der Episode
-        - 1 kurz vor Timeout (wenn nicht gefallen)
-        Timeouts sind okay, Stürze nicht.
+        Survival reward that increases with episode progress, but only if not fallen.
+        - Starts at 0 and goes up to 1 as the episode progresses, but resets to 0 if the robot falls.
+
+        Timeouts are acceptable, falls are not. 
+        This encourages the robot to survive as long as possible, but does not give any reward for surviving if it has already fallen. 
         """
         
         fallen = self._compute_fallen_mask().float()  # 1.0 bei Sturz
-        alive  = 1.0 - fallen                          # 1.0 solange nicht gefallen
+        alive  = 1.0 - fallen                         # 1.0 solange nicht gefallen
 
         # normierte Episodenlänge in [0, 1]
         prog = self.episode_length_buf.float() / float(self.max_episode_length)
@@ -2185,27 +1976,9 @@ class DodoEnvironment:
     
     @register_reward()
     def _reward_fall_penalty(self):
-        # """
-        # Bestrafe Umfallen: sobald Roll oder Pitch über den Schwellwert gehen.
-        # Gibt –1.0 pro Step zurück, wenn überschritten.
-        # """
-        # # Roll und Pitch in Radiant
-        # roll  = self.base_euler[:, 1] 
-        # pitch = self.base_euler[:, 0] 
-
-        # # Thresholds aus reward_cfg (z.B. 30° in Radiant)
-        # thr_r = self.reward_config_dataclass.roll_threshold
-        # thr_p = self.reward_config_dataclass.pitch_threshold
-
-        # # Maske, wo einer der Winkel überschritten ist
-        # mask = ((roll.abs() > thr_r) | (pitch.abs() > thr_p)).float()
-
-        # # Als Penalty skaliert –1 pro Step
-        # return -mask
-
         """
-        Große Strafe nur bei echtem Sturz.
-        Timeouts sind neutral.
+        Big penalty only for actual falls.
+        Timeouts are neutral.
         """
         fallen = self._compute_fallen_mask().float()  # 1.0 bei Sturz
         return -fallen   # mit Scale z.B. 100.0 in deiner Config
@@ -2215,21 +1988,8 @@ class DodoEnvironment:
     @register_reward()
     def _reward_bird_hip_phase(self):
         """
-        Vogel‑typischer Hüft‑FE‑Zyklustreiber als Gauß‑Reward.
+        Bird-like hip flexion/extension phase driver as a Gaussian reward:
         """
-        # idx_l = self.idx_left_thigh
-        # idx_r = self.idx_right_thigh
-        # phase = ((self.episode_length_buf.float() * self.dt) % self.reward_config_dataclass.period) / self.reward_config_dataclass.period
-        # omega = 2 * math.pi * phase
-        # tgt  = self.reward_config_dataclass.bird_hip_target
-        # amp  = self.reward_config_dataclass.bird_hip_amp
-        # desired_l = tgt + amp * torch.sin(omega)
-        # desired_r = tgt - amp * torch.sin(omega)
-        # a_l = self.dof_pos[:, idx_l]
-        # a_r = self.dof_pos[:, idx_r]
-        # err = (a_l - desired_l)**2 + (a_r - desired_r)**2
-        # sigma = self.reward_config_dataclass.bird_hip_sigma
-        # return torch.exp(-err / (2 * sigma**2))
         gate = self._gait_gate()
 
         idx_l = self.idx_left_thigh
@@ -2251,37 +2011,10 @@ class DodoEnvironment:
 
     @register_reward()
     def _reward_hip_abduction_penalty(self):
-        # """
-        # Gauß‑Strafe für Hüft‑AA Abduktion/Adduktion.
-        # """
-        # idx_l = self.idx_left_hip
-        # idx_r = self.idx_right_hip
-        # abd_l = self.dof_pos[:, idx_l]
-        # abd_r = self.dof_pos[:, idx_r]
-        # err = abd_l**2 + abd_r**2
-        # sigma = self.reward_config_dataclass.hip_abduction_sigma
-        # return torch.exp(-err / (2 * sigma**2))
-
-        # """
-        # Gauß-Strafe für Hüft-AA Abduktion/Adduktion.
-        # Nur aktiv wenn |v_y| klein ist (sonst braucht er Abspreizen).
-        # """
-        # gate = self._abduction_gate()  # <- deine neue Funktion
-
-        # idx_l = self.idx_left_hip
-        # idx_r = self.idx_right_hip
-        # abd_l = self.dof_pos[:, idx_l]
-        # abd_r = self.dof_pos[:, idx_r]
-
-        # err = abd_l**2 + abd_r**2
-        # sigma = self.reward_config_dataclass.hip_abduction_sigma
-
-        # return gate * torch.exp(-err / (2 * sigma**2))
-
         """
-        Command-konditionierter Abduction-Reward (Mismatch-Form):
-        - bei |vy_cmd| ~ 0: desired_abd ~ 0  (Spur halten)
-        - bei |vy_cmd| groß: desired_abd ~ abd_max (Seitwärtsgehen erlauben/unterstützen)
+        Command conditioned Abduction Reward (Mismatch Form):
+        - at |vy_cmd| ~ 0: desired_abd ~ 0 (keeping straight)
+        - at high |vy_cmd|: desired_abd ~ abd_max (allowing/supporting side-stepping)
         """
         idx_l = self.idx_left_hip
         idx_r = self.idx_right_hip
@@ -2307,23 +2040,10 @@ class DodoEnvironment:
         return torch.exp(-err / (2 * sigma**2 + 1e-8))
 
 
-        # """
-        # Echte Penalty (negativ) für Hüft-Abduktion/Adduktion.
-        # """
-        # idx_l = self.idx_left_hip
-        # idx_r = self.idx_right_hip
-        # abd_l = self.dof_pos[:, idx_l]
-        # abd_r = self.dof_pos[:, idx_r]
-
-        # # Quadratische Strafe
-        # err = abd_l**2 + abd_r**2
-        # return -err
-
-
     @register_reward()
     def _reward_lateral_drift_penalty(self):
         """
-        Gauß‑Reward für geringe seitliche Drift (y‑Geschw.).
+        Gauß reward for low lateral drift (y-velocity).
         """
         drift = self.base_lin_vel[:, 1].abs()
         sigma = self.reward_config_dataclass.drift_sigma
@@ -2331,6 +2051,9 @@ class DodoEnvironment:
     
     @register_reward()
     def _reward_vertical_stability(self):
+        """
+        Gauß reward for low vertical velocity, encouraging stable foot contact and reduced hopping/bouncing.
+        """
         v_z = self.base_lin_vel[:, 2]
         sigma = 0.2
         return torch.exp(- (v_z**2) / (2 * sigma**2))
@@ -2338,17 +2061,9 @@ class DodoEnvironment:
     
     @register_reward()
     def _reward_action_rate(self):
-        # """
-        # Bestraft schnelle Änderungen in den Aktionen (hohe Aktionsrate).
-        # Größere Änderungen -> stärkerer negativer Reward.
-        # """
-        
-        # diff = self.actions - self.last_actions
-        # err = torch.sum(diff**2, dim=1)
-        # sigma = 0.2 * self.env_config_dataclass.action_scale  # relative to action scale
-        # return torch.exp(-err / (2 * sigma**2))
         """
-        Echte Penalty (negativ) für schnelle Aktionsänderungen -> reduziert Hochfrequenz-Jitter.
+        Real penalty instead of Gaussian reward, because we want to strongly discourage big jumps in actions, and a Gaussian would still give a small reward even for large changes.
+        Reduces high-frequency action changes that can lead to jerky motions and high energy consumption -> JITTER
         """
         diff = self.actions - self.last_actions
         err = torch.sum(diff**2, dim=1)
@@ -2356,22 +2071,15 @@ class DodoEnvironment:
     
     @register_reward()
     def _reward_step_events(self):
-        # gate = self._gait_gate()
-
-        # contact = (self.current_ankle_heights < self.CONTACT_HEIGHT).float()  # (N,2)
-        # events = torch.clamp(contact - self.prev_contact, min=0.0)
-        # self.prev_contact[:] = contact
-
-        # return gate * events.sum(dim=1)
-
         """
-        Command-konditionierter Step-Event Reward (Mismatch-Form):
-        - bei v_cmd ~ 0: desired_events ~ 0 (keine Schritte)
-        - bei v_cmd groß: desired_events ~ 2*dt/period (regelmäßige Schritte)
-        Reward hoch, wenn Event-Rate zur gewünschten passt.
+        Command conditioned step event reward:
+        - At low commanded velocity, we want few to no steps -> desired_events ~ 0
+        - At high commanded velocity, we want regular steps -> desired_events ~ 2*dt/period (because we have 2 steps per period in a nice gait)
+
+        Reward is high when the actual step event rate matches the desired one.
         """
         g = self._gait_gate()
-        contact = (self.current_ankle_heights < self.CONTACT_HEIGHT).float()
+        contact = (self.current_ankle_heights < self.env_config_dataclass.contact_height).float()
         events = torch.clamp(contact - self.prev_contact, min=0.0)
         self.prev_contact[:] = contact
         return g * events.sum(dim=1)   # 0..2
