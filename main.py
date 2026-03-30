@@ -23,7 +23,7 @@ def main():
     # -----------------------------------------------------------------------------
     # Initialize Genesis
     # -----------------------------------------------------------------------------
-    gs.init(backend=gs.cpu) #gs.cuda or gs.cpu
+    gs.init(backend=gs.cuda) #gs.cuda or gs.cpu
     
 
     # -----------------------------------------------------------------------------
@@ -63,7 +63,7 @@ def main():
     The following function can be used to import the robot in a standing configuration, which is useful for debugging and testing a new URDF file
     or initial parameters like choosing the right spawn position, etc...
     """
-    #dodo_env.import_robot_standing(manual_stepping=False, total_steps=1000, spawn_position=(0.0, 0.0, 0.38)) # old dodobot_v3 was (0.0, 0.0, 0.55) new dodo_daimao standing is (0.0, 0.0, 0.38), new dodo_daimao lying is (0.0, 0.0, 0.095)
+    dodo_env.import_robot_standing(manual_stepping=False, total_steps=1000, spawn_position=(0.0, 0.0, 0.38)) # old dodobot_v3 was (0.0, 0.0, 0.55) new dodo_daimao standing is (0.0, 0.0, 0.38), new dodo_daimao lying is (0.0, 0.0, 0.095)
 
     """
     The following function can be used to train a new model.
@@ -78,7 +78,7 @@ def main():
     The following function can be used to evaluate a trained model.
     The function opens a window with the simulation and visualizes the robot's behavior using the trained model and the given velocity commands.
     """
-    dodo_env.eval_trained_model(exp_name="daimao_walking_003", v_x=0.3, v_y=0.0, v_ang=-0.0, model_name="model_final.pt")
+    #dodo_env.eval_trained_model(exp_name="daimao_walking_004", v_x=0.0, v_y=0.0, v_ang=0.5, model_name="model_final.pt")
 
     """
     The following function can be used to export an already trained model to a JIT format.

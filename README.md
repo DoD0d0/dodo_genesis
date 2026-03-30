@@ -63,11 +63,12 @@ Make sure you have:
 
 * Python ≥ 3.8
 * CUDA (for GPU training)
+* Anaconda / conda or mamba (for creating the virtual environment)
 
 Then install:
 
 ```bash
-pip install -r requirements.txt
+conda env create -f conda_env.yaml
 ```
 
 ⚠️ Important:
@@ -81,6 +82,9 @@ pip install rsl-rl-lib==2.2.4
 ## ▶️ Usage
 
 ### 🧪 1. Test robot (debug simulation)
+
+* Set the correct URDF file when creating the FileFormatAndPaths object in `main.py`
+  * Make sure, that your robot is inside the robots folder or use the given dodo model.
 
 ```bash
 python main.py
@@ -102,6 +106,8 @@ This runs a sinusoidal joint test to verify:
 
 ### 🧍 2. Test standing controller
 
+Uncomment in `main.py`:
+
 ```python
 dodo_env.import_robot_standing()
 ```
@@ -116,6 +122,12 @@ Useful for:
 
 ### 🏋️ 3. Train a policy
 
+Uncomment in `main.py`:
+
+```python
+dodo_env.dodo_train()
+```
+
 ```bash
 python main.py --num_envs 4096 --max_iterations 500 --exp_name dodo-walking
 ```
@@ -129,6 +141,12 @@ Training uses:
 ---
 
 ### 👀 4. Evaluate trained model
+
+Uncomment in `main.py`:
+
+```python
+dodo_env.eval_trained_model(exp_name="exp_name", v_x=0.3, v_y=0.0, v_ang=0.0, model_name="model_final.pt")
+```
 
 ```python
 dodo_env.eval_trained_model(
@@ -147,12 +165,20 @@ dodo_env.eval_trained_model(
 
 ### 💾 5. Export model (for deployment)
 
+Uncomment in `main.py`:
+
+```python
+dodo_env.export_checkpoint_to_jit(exp_name="exp_name", model_name="model_final.pt")
+```
+
 ```python
 dodo_env.export_checkpoint_to_jit(
     exp_name="your_experiment",
     model_name="model_final.pt"
 )
 ```
+
+* The .jit file is exportet inside the same exp folder of model_final.pt
 
 Used for:
 
@@ -256,6 +282,8 @@ Visualization:
 
 ## Example Commands
 
+* Make sure, that you uncomment the `dodo_env.dodo_train()` in `main.py` and comment out all other unnecessary parts.
+
 ```bash
 # Train walking
 python main.py --num_envs 4096 --max_iterations 400 --exp_name dodo-walking
@@ -266,6 +294,8 @@ python main.py --num_envs 512 --max_iterations 50 --exp_name debug
 # Continue training
 python main.py --exp_name dodo-walking --max_iterations 200
 ```
+
+-> `ctrl + c` will terminate the process in the terminal as usual.
 
 ---
 
