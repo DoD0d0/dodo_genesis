@@ -75,6 +75,7 @@ class RewardScales:
     energy_penalty: float
     action_rate: float
     step_events: float
+    swing_leg_motion: float
 
 @dataclass
 class CommandRanges:
@@ -327,7 +328,7 @@ def init_dodo_configs(
             activation=                   "elu",
             actor_hidden_dims=            [512, 256, 128],
             critic_hidden_dims=           [512, 256, 128],
-            init_noise_std=               0.20,     
+            init_noise_std=               0.17,     
             class_name=                   "ActorCritic"
         ),
         runner=TrainRunner(
@@ -343,7 +344,7 @@ def init_dodo_configs(
         ),
         runner_class_name=                "OnPolicyRunner",
         # collect at least one gait cycle per env: e.g. 1.0s / dt(0.01) = 100 steps 
-        num_steps_per_env=                160, # previous 192 -> longer rollouts === bigger batch size === higher time consumption per iteration.
+        num_steps_per_env=                192, # previous 192 -> longer rollouts === bigger batch size === higher time consumption per iteration.
         save_interval=                    50,
         empirical_normalization=          True,
         seed=                             1,
@@ -452,7 +453,7 @@ def init_dodo_configs(
         foot_link_names=                  foot_link_names,              # for example: ['Left_FOOT_FE', 'Right_FOOT_FE']
         robot_file_format=                robot_file_format,            # for example "xml" or "urdf"
         terrain_cfg=                      terrain_config_dataclass, 
-        contact_height=                   0.05,                         # m, if the foot is lower than that it is considered in contact with the ground.
+        contact_height=                   0.051,                         # m, if the foot is lower than that it is considered in contact with the ground.
         init_pose_noise=                  0.02                          # std of the noise added to the initial joint angles after reset for better exploration and more robust policies (tested values up to 0.04, but it can cause convergence issues if it is too high
     )    
     
@@ -470,43 +471,44 @@ def init_dodo_configs(
         # All reward functions are defined at the bottom of the dodo_environment.py file!
         reward_scales=RewardScales(
             #velocity tracking
-            tracking_lin_vel=             5.0,    # reward: track commanded linear velocity
+            tracking_lin_vel=             4.0,    # reward: track commanded linear velocity
             tracking_ang_vel=             5.0,    # reward: track commanded angular velocity
             #stability and posture   
-            orientation_stability=        0.4,    # reward: keep stable orientation (not rolling or pitching)
-            base_height=                  0.5,    # reward: keep the base at a desired height
-            survive=                      0.2,    # reward: survive many steps
+            orientation_stability=        0.6,    # reward: keep stable orientation (not rolling or pitching)
+            base_height=                  0.8,    # reward: keep the base at a desired height
+            survive=                      0.15,    # reward: survive many steps
             fall_penalty=                 60.0,   # penalty: avoid falling
-            vertical_stability=           0.06,   # penalty: avoid jumping
+            vertical_stability=           0.12,   # penalty: avoid jumping
             #gait-shaping (bird style)
-            periodic_gait=                0.0,    # reward: follow a periodic gait pattern (defined in dodo_environment.py)
-            foot_swing_clearance=         2.0,    # reward: keep enough foot clearance during swing phase to avoid tripping
+            periodic_gait=                0.05,    # reward: follow a periodic gait pattern (defined in dodo_environment.py)
+            foot_swing_clearance=         1.5,    # reward: keep enough foot clearance during swing phase to avoid tripping
             knee_extension_at_push=       0.0,    # reward: extend the knee during the push-off phase for more propulsion
             bird_hip_phase=               0.0,    # reward: move the hip in a bird-like manner (defined in dodo_environment.py)
             forward_torso_pitch=          0.0,    # reward: lean the torso forward during walking
             #Joint penalties
-            hip_abduction_penalty=        0.05,   # penalty: avoid hip abduction from the initial pose
+            hip_abduction_penalty=        0.1,   # penalty: avoid hip abduction from the initial pose
             #drift and efficiency
             lateral_drift_penalty=        0.0,    # penalty: avoid lateral drift -> only usefull if cmd_vel_y is zero
             action_rate=                  0.000,  # penalty: avoid changing actions too quickly, which can be a sign of an unstable policy and can also damage the motors in real life -> It can reduce jitter
-            energy_penalty=               0.05,   # penalty: similar to action_rate penalty -> Only use one of them.
-            step_events=                  1.0,    # reward: reward for each step event
+            energy_penalty=               0.01,   # penalty: similar to action_rate penalty -> Only use one of them.
+            step_events=                  0.02,    # reward: reward for each step event
+            swing_leg_motion=             0.25,    # reward: encourage active swing leg motion -> No tiptoe walking
         ),
         # Hyperparameters for the shaping functions in the reward terms
-        base_height_target=               0.37,           # m, Hip height target
+        base_height_target=               0.38,           # m, Hip height target
         base_height_threshold=            0.23,           # m, if the base height gets lower than that the robot is considered fallen.
-        clearance_target=                 0.09,           # m, target foot clearance during swing phase
-        period=                           1.0,            # s, Cycle period for the periodic gait reward in seconds
+        clearance_target=                 0.025,           # m, target foot clearance during swing phase
+        period=                           0.9,            # s, Cycle period for the periodic gait reward in seconds
         bird_hip_target=                 -0.7,            # rad, Hip target for the bird style gait
         bird_hip_amp=                     0.35,           # rad, cyclic amplitude for the bird hip movement
         pitch_target=                     0.0,            # rad, target torso pitch angle (leaning forward/backward)
         pitch_threshold=                  45 * pi/180,    # rad, if the torso pitch angle gets greater than that the robot is considered fallen.
         roll_threshold=                   45 * pi/180,    # rad, if the torso roll angle gets greater than that the robot is considered fallen.
+        tracking_sigma=                   0.1,            # sigma, Velocity tracking
         orient_sigma=                     0.08,           # sigma, Roll/Pitch sigma
-        height_sigma=                     0.07,           # sigma, Hip height sigma
+        height_sigma=                     0.05,           # sigma, Hip height sigma
         pitch_sigma=                      0.07,           # sigma, Pitch reward
-        energy_sigma=                     0.15,           # sigma, changing actions
-        tracking_sigma=                   0.12,           # sigma, Velocity tracking
+        energy_sigma=                     0.16,           # sigma, changing actions
         bird_hip_sigma=                   0.12,           # sigma, bird hip reward
         hip_abduction_sigma=              0.13,           # sigma, Hip abduction from initial pose
         drift_sigma=                      0.08,           # sigma,  lateral drift
@@ -516,9 +518,9 @@ def init_dodo_configs(
         num_commands= 3,
         resampling_time_s= 4.0,
         command_ranges=CommandRanges(
-            lin_vel_x=[-0.2, 0.5],
+            lin_vel_x=[-0.1, 0.5],
             lin_vel_y=[-0.3, 0.3], 
-            ang_vel_yaw=[-1.0, 1.0] # for example [-1.0, 1.0]
+            ang_vel_yaw=[-0.7, 0.7] # for example [-1.0, 1.0]
         )
     )
 

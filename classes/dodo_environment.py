@@ -852,21 +852,21 @@ class DodoEnvironment:
 
                 # #print ankle heights and contact state for debugging
                 # print(self.current_ankle_heights[0]) 
-                # print((self.current_ankle_heights[0] < self.CONTACT_HEIGHT).float())
+                # print((self.current_ankle_heights[0] < self.env_config_dataclass.contact_height).float())
 
                 if self.episode_length_buf[0] % 10 == 0:
                     # print(
                     #     f"Cmd: [{self.commands[0,0]:.2f}, "
                     #     f"{self.commands[0,1]:.2f}, {self.commands[0,2]:.2f}]"
                     # )
-                    # print(
-                    #     f"Vel: [{self.base_lin_vel[0,0]:.2f}, "
-                    #     f"{self.base_lin_vel[0,1]:.2f}, {self.base_ang_vel[0,2]:.2f}]"
-                    # )
-                    # print(
-                    #     f"Applied Torque: [{self.robot.get_dofs_control_force()}"
-                    #     f"Actual Torque: [{self.robot.get_dofs_force()}"
-                    # )
+                    print(
+                        f"Vel: [{self.base_lin_vel[0,0]:.2f}, "
+                        f"{self.base_lin_vel[0,1]:.2f}, {self.base_ang_vel[0,2]:.2f}]"
+                    )
+                    print(
+                        f"Applied Torque: [{self.robot.get_dofs_control_force()}"
+                        f"Actual Torque: [{self.robot.get_dofs_force()}"
+                    )
                     # print(self.base_pos[0, 2], reward_cfg.get("base_height_target", 0.55))
                     pass
     
@@ -1766,10 +1766,18 @@ class DodoEnvironment:
         You can adapt the thresholds (vmin, vmax) to control how "demanding" the gait reward is.
         Thresholds are smart because the robot should not step at standstill but should get rewarded for a nice gait when moving fast enough.
         """
-        v = torch.norm(self.commands[:, 0:2], dim=1)
-        vmin = 0.05   # darunter: wie "stehen"
-        vmax = 0.25   # darüber: voller gait reward
-        return torch.clamp((v - vmin) / (vmax - vmin), 0.0, 1.0)
+        # v = torch.norm(self.commands[:, 0:2], dim=1)
+        # vmin = 0.05   # darunter: wie "stehen"
+        # vmax = 0.15   # darüber: voller gait reward
+        # return torch.clamp((v - vmin) / (vmax - vmin), 0.0, 1.0)
+        v_xy = torch.norm(self.commands[:, 0:2], dim=1)
+        w_z  = torch.abs(self.commands[:, 2])
+
+        motion = torch.maximum(v_xy, 0.6 * w_z)
+
+        vmin = 0.07
+        vmax = 0.2
+        return torch.clamp((motion - vmin) / (vmax - vmin), 0.0, 1.0)
     
     def _abduction_gate(self):
         """
@@ -1828,26 +1836,25 @@ class DodoEnvironment:
 
     @register_reward()
     def _reward_foot_swing_clearance(self):
+        """ Foot swing clearance reward:
+        Encourages the robot to lift its feet sufficiently during the swing phase to avoid tripping.
         """
-        Rewarding swing foot clearance relative to the ground level.
-        clearance_target is the desired height ABOVE the contact level.
-        """
-        g = self._gait_gate()                                  # (N,)
+        g = self._gait_gate()
 
-        hs = self.current_ankle_heights                        # (N,2)
-        contact = (hs < self.env_config_dataclass.contact_height).float()          # (N,2)
-        swing_mask = 1.0 - contact                            # (N,2)
+        hs = self.current_ankle_heights
+        contact = (hs < self.env_config_dataclass.contact_height).float()
+        swing_mask = 1.0 - contact
 
-        # relative Clearance
         clearance = torch.clamp(hs - self.env_config_dataclass.contact_height, min=0.0)
 
-        target = self.reward_config_dataclass.clearance_target 
-        min_clearance = 0.005 
+        target = self.reward_config_dataclass.clearance_target
+        min_clearance = 0.004
         desired = (min_clearance + g * (target - min_clearance)).unsqueeze(1)
 
-        err = (clearance - desired) ** 2
+        delta = clearance - desired
+        err = torch.where(delta < 0.0, 2.0 * delta**2, 0.5 * delta**2)
 
-        sigma = 0.007 # small sigma because we have a clear target and want to strongly encourage matching it. We also have small values
+        sigma = 0.008
         per_foot = torch.exp(-err / (2 * sigma**2))
         per_foot = per_foot * swing_mask
 
@@ -1860,7 +1867,6 @@ class DodoEnvironment:
         return rew
 
 
-
     @register_reward()
     def _reward_forward_torso_pitch(self):
         """
@@ -1871,33 +1877,49 @@ class DodoEnvironment:
         sigma = self.reward_config_dataclass.pitch_sigma
         return torch.exp(-err / (2 * sigma**2))
 
-
+    
     @register_reward()
     def _reward_knee_extension_at_push(self):
         """
-        Rewarding knee extension at push-off can encourage a more natural and efficient gait, as it promotes better force transmission and energy transfer during walking. 
-        This reward can help the robot learn to extend its knees properly when pushing off the ground, which is crucial for achieving a stable and effective walking pattern.
+        Reward moderate knee extension of stance legs, without using a gait phase.
+
+        Idea:
+        - Only legs that are in contact are considered
+        - Reward extension relative to the crouched default pose
+        - Best reward at a moderately extended knee, not at full extension
         """
-        gate = self._gait_gate()
+
+        g = self._gait_gate()  # (N,)
 
         hs = self.current_ankle_heights
-        # some foots are in contact if hs < contact_height, so we want to reward knee extension only when we are in the stance phase (not swinging)
-        stance = (hs < self.env_config_dataclass.contact_height).any(dim=1).float()
+        contact = (hs < self.env_config_dataclass.contact_height).float()  # (N,2)
 
         idx_l = self.idx_left_knee
         idx_r = self.idx_right_knee
 
         angle_l = self.dof_pos[:, idx_l]
         angle_r = self.dof_pos[:, idx_r]
+        knees = torch.stack([angle_l, angle_r], dim=1)  # (N,2)
 
-        max_angle = 1.75  # z.B. ~40 Grad
+        # crouched default pose and desired moderate extension
+        crouched = self.env_config_dataclass.default_joint_angles.left_knee   # e.g. -1.4
+        target   = crouched + 0.4                                            # e.g. -0.95
+        sigma    = 0.10
 
-        ext_l = 1.0 - torch.clamp(torch.abs(angle_l) / max_angle, max=1.0)
-        ext_r = 1.0 - torch.clamp(torch.abs(angle_r) / max_angle, max=1.0)
+        err = (knees - target) ** 2
+        per_leg = torch.exp(-err / (2 * sigma**2))
 
-        ext_mean = 0.5 * (ext_l + ext_r)
+        # only stance legs count
+        per_leg = per_leg * contact
 
-        return gate * stance * ext_mean
+        num_stance = contact.sum(dim=1).clamp(min=1.0)
+        rew = per_leg.sum(dim=1) / num_stance
+
+        # no reward if no foot is in contact
+        no_stance = (contact.sum(dim=1) < 0.5).float()
+        rew = rew * (1.0 - no_stance)
+
+        return g * rew
 
 
     @register_reward()
@@ -1922,7 +1944,7 @@ class DodoEnvironment:
         Gauß Reward for angular velocity tracking in z, based on the squared error between commanded and actual yaw rate. 
         """
         err = (self.commands[:, 2] - self.base_ang_vel[:, 2])**2
-        sigma = self.reward_config_dataclass.tracking_sigma * 1.5  # evtl. engeres Tracking für Rotation
+        sigma = self.reward_config_dataclass.tracking_sigma * 0.6  # evtl. engeres Tracking für Rotation
         return torch.exp(-err / (2 * sigma**2))
 
 
@@ -2083,3 +2105,37 @@ class DodoEnvironment:
         events = torch.clamp(contact - self.prev_contact, min=0.0)
         self.prev_contact[:] = contact
         return g * events.sum(dim=1)   # 0..2
+    
+    @register_reward()
+    def _reward_swing_leg_motion(self):
+        """ 
+        Command conditioned reward for active swing leg motion: 
+        - At low commanded velocity, we want minimal swing motion -> desired_motion ~ 0
+        - At high commanded velocity, we want active swing motion -> desired_motion > 0
+        """
+        g = self._gait_gate()
+
+        hs = self.current_ankle_heights
+        contact = (hs < self.env_config_dataclass.contact_height).float()
+        swing_mask = 1.0 - contact   # (N,2)
+
+        l_thigh = torch.abs(self.dof_pos[:, self.idx_left_thigh] - self.default_dof_pos[self.idx_left_thigh])
+        r_thigh = torch.abs(self.dof_pos[:, self.idx_right_thigh] - self.default_dof_pos[self.idx_right_thigh])
+
+        l_knee = torch.abs(self.dof_pos[:, self.idx_left_knee] - self.default_dof_pos[self.idx_left_knee])
+        r_knee = torch.abs(self.dof_pos[:, self.idx_right_knee] - self.default_dof_pos[self.idx_right_knee])
+
+        # combined leg excursion
+        leg_motion = torch.stack([
+            0.5 * l_thigh + 0.5 * l_knee,
+            0.5 * r_thigh + 0.5 * r_knee,
+        ], dim=1)
+
+        target = 0.4   # rad
+        sigma = 0.18
+        err = (leg_motion - target) ** 2
+
+        per_leg = torch.exp(-err / (2 * sigma**2)) * swing_mask
+        num_swing = swing_mask.sum(dim=1).clamp(min=1.0)
+
+        return g * per_leg.sum(dim=1) / num_swing
